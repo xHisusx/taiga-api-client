@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { Project, TaigaClient, UserStory, Task, Issue, Milestone } from "../../src/index.js";
+import type { Epic, Project, TaigaClient, UserStory, Task, Issue, Milestone } from "../../src/index.js";
 import { integrationEnv, makeClient, uniqueName } from "./helpers.js";
 
 const skip = !integrationEnv;
@@ -13,6 +13,7 @@ d("integration: end-to-end project lifecycle", () => {
   let task: Task;
   let issue: Issue;
   let milestone: Milestone;
+  let epic: Epic;
 
   beforeAll(async () => {
     client = makeClient(env);
@@ -25,7 +26,7 @@ d("integration: end-to-end project lifecycle", () => {
       is_kanban_activated: true,
       is_issues_activated: true,
       is_wiki_activated: false,
-      is_epics_activated: false,
+      is_epics_activated: true,
       is_private: true,
     });
   });
@@ -193,6 +194,54 @@ d("integration: end-to-end project lifecycle", () => {
     it("lists memberships for the project (owner is a member)", async () => {
       const list = await client.memberships.list({ project: project.id });
       expect(list.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe("epics", () => {
+    it("creates an epic", async () => {
+      epic = await client.epics.create({
+        project: project.id,
+        subject: uniqueName("epic"),
+        description: "Created by integration test",
+      });
+      expect(epic.id).toBeTypeOf("number");
+      expect(epic.project).toBe(project.id);
+    });
+
+    it("lists epics for the project", async () => {
+      const list = await client.epics.list({ project: project.id });
+      expect(list.some((e) => e.id === epic.id)).toBe(true);
+    });
+
+    it("returns filters_data for epics", async () => {
+      const data = await client.epics.filtersData({ project: project.id });
+      expect(data).toBeTypeOf("object");
+    });
+
+    it("links a user story to the epic and unlinks it", async () => {
+      const link = await client.epics.addRelatedUserStory(epic.id, { user_story: story.id });
+      expect(link.user_story).toBe(story.id);
+
+      const related = await client.epics.relatedUserStories(epic.id);
+      expect(related.some((r) => r.user_story === story.id)).toBe(true);
+
+      await client.epics.removeRelatedUserStory(epic.id, story.id);
+      const after = await client.epics.relatedUserStories(epic.id);
+      expect(after.some((r) => r.user_story === story.id)).toBe(false);
+    });
+
+    it("upvotes and watches the epic", async () => {
+      await client.epics.upvote(epic.id);
+      const voters = await client.epics.voters(epic.id);
+      expect(Array.isArray(voters)).toBe(true);
+
+      await client.epics.watch(epic.id);
+      const watchers = await client.epics.watchers(epic.id);
+      expect(Array.isArray(watchers)).toBe(true);
+    });
+
+    it("deletes the epic", async () => {
+      await client.epics.delete(epic.id);
     });
   });
 

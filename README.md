@@ -310,6 +310,38 @@ await client.issues.upvote(issue.id);
 await client.issues.watch(issue.id);
 ```
 
+### `client.epics` — epics
+
+Base CRUD plus:
+
+| Method                                  | HTTP                                            | Description                                                |
+| --------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
+| `bulkCreate(payload)`                   | `POST /epics/bulk_create`                       | Create multiple epics from a newline-separated string.     |
+| `filtersData({ project })`              | `GET /epics/filters_data?project=...`           | Available filters for the UI.                              |
+| `relatedUserStories(id)`                | `GET /epics/:id/related_userstories`            | User stories linked to the epic.                           |
+| `addRelatedUserStory(id, { user_story })` | `POST /epics/:id/related_userstories`         | Link an existing user story to the epic.                   |
+| `removeRelatedUserStory(id, usId)`      | `DELETE /epics/:id/related_userstories/:usId`   | Unlink a user story from the epic.                         |
+| `voters(id)`                            | `GET /epics/:id/voters`                         | Users that have upvoted the epic.                          |
+| `upvote(id)`                            | `POST /epics/:id/upvote`                        | Upvote an epic.                                            |
+| `downvote(id)`                          | `POST /epics/:id/downvote`                      | Remove your upvote.                                        |
+| `watchers(id)`                          | `GET /epics/:id/watchers`                       | Users watching the epic.                                   |
+| `watch(id)`                             | `POST /epics/:id/watch`                         | Subscribe to notifications.                                |
+| `unwatch(id)`                           | `POST /epics/:id/unwatch`                       | Unsubscribe.                                               |
+
+```ts
+const epic = await client.epics.create({
+  project: proj.id,
+  subject: "Q1 roadmap",
+  color: "#ff8800",
+});
+await client.epics.addRelatedUserStory(epic.id, { user_story: story.id });
+for (const link of await client.epics.relatedUserStories(epic.id)) {
+  console.log(link.user_story);
+}
+```
+
+> ℹ️ Epics must be enabled on the project (`is_epics_activated: true`) for these endpoints to work.
+
 ### `client.milestones` — sprints
 
 Base CRUD plus:
@@ -413,7 +445,7 @@ The available methods are `get`, `post`, `put`, `patch`, `delete`. They all acce
 
 ## Coverage
 
-**Implemented (v0.1):**
+**Implemented:**
 
 - Auth: login, refresh, logout, application token, session restore, auto-refresh with deduplication
 - Users: profile, list, update, change password, stats
@@ -423,8 +455,9 @@ The available methods are `get`, `post`, `put`, `patch`, `delete`. They all acce
 - Tasks: CRUD, bulk_create, filters_data
 - Issues: CRUD, filters_data, voters, watchers, upvote/downvote, watch/unwatch
 - Milestones: CRUD, stats
+- Epics _(new in v0.2)_: CRUD, bulk_create, filters_data, related_userstories (list/add/remove), voters, watchers, upvote/downvote, watch/unwatch
 
-**Not implemented yet (planned for upcoming releases):** epics, wiki, webhooks, attachments, custom attributes, history/comments, importers (Trello/Jira/GitHub), project templates, GitHub OAuth flow.
+**Not implemented yet (planned for upcoming releases):** wiki, webhooks, attachments, custom attributes, history/comments, importers (Trello/Jira/GitHub), project templates, GitHub OAuth flow.
 
 If the endpoint you need is not covered, fall back to [`client.http`](#low-level-access) and/or open an issue.
 

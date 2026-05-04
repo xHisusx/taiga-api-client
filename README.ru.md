@@ -311,6 +311,38 @@ await client.issues.upvote(issue.id);
 await client.issues.watch(issue.id);
 ```
 
+### `client.epics` — эпики
+
+Базовый CRUD + следующие методы:
+
+| Метод                                     | HTTP                                          | Описание                                                |
+| ----------------------------------------- | --------------------------------------------- | ------------------------------------------------------- |
+| `bulkCreate(payload)`                     | `POST /epics/bulk_create`                     | Создать несколько эпиков мульти-строкой (по `\n`).      |
+| `filtersData({ project })`                | `GET /epics/filters_data?project=...`         | Доступные фильтры для UI.                               |
+| `relatedUserStories(id)`                  | `GET /epics/:id/related_userstories`          | User-стори, привязанные к эпику.                        |
+| `addRelatedUserStory(id, { user_story })` | `POST /epics/:id/related_userstories`         | Привязать существующую историю к эпику.                 |
+| `removeRelatedUserStory(id, usId)`        | `DELETE /epics/:id/related_userstories/:usId` | Отвязать историю от эпика.                              |
+| `voters(id)`                              | `GET /epics/:id/voters`                       | Список тех, кто проголосовал за эпик.                   |
+| `upvote(id)`                              | `POST /epics/:id/upvote`                      | Проголосовать «за».                                     |
+| `downvote(id)`                            | `POST /epics/:id/downvote`                    | Снять свой голос.                                       |
+| `watchers(id)`                            | `GET /epics/:id/watchers`                     | Список наблюдателей.                                    |
+| `watch(id)`                               | `POST /epics/:id/watch`                       | Подписаться на уведомления.                             |
+| `unwatch(id)`                             | `POST /epics/:id/unwatch`                     | Отписаться.                                             |
+
+```ts
+const epic = await client.epics.create({
+  project: proj.id,
+  subject: "Q1 roadmap",
+  color: "#ff8800",
+});
+await client.epics.addRelatedUserStory(epic.id, { user_story: story.id });
+for (const link of await client.epics.relatedUserStories(epic.id)) {
+  console.log(link.user_story);
+}
+```
+
+> ℹ️ Эпики должны быть включены в проекте (`is_epics_activated: true`), иначе эндпоинты вернут ошибку.
+
 ### `client.milestones` — спринты
 
 Базовый CRUD + следующие методы:
@@ -414,7 +446,7 @@ console.log(result.data, result.pagination, result.headers);
 
 ## Что покрыто и что нет
 
-**Покрыто (v0.1):**
+**Покрыто:**
 
 - Auth: login, refresh, logout, application token, восстановление сессии, авто-refresh с дедупликацией
 - Users: профиль, list, update, смена пароля, stats
@@ -424,8 +456,9 @@ console.log(result.data, result.pagination, result.headers);
 - Tasks: CRUD, bulk_create, filters_data
 - Issues: CRUD, filters_data, voters, watchers, upvote/downvote, watch/unwatch
 - Milestones: CRUD, stats
+- Epics _(новое в v0.2)_: CRUD, bulk_create, filters_data, related_userstories (list/add/remove), voters, watchers, upvote/downvote, watch/unwatch
 
-**Не покрыто (планируется в следующих релизах):** epics, wiki, webhooks, attachments, custom attributes, history/comments, importers (Trello/Jira/GitHub), project templates, OAuth-флоу через GitHub.
+**Не покрыто (планируется в следующих релизах):** wiki, webhooks, attachments, custom attributes, history/comments, importers (Trello/Jira/GitHub), project templates, OAuth-флоу через GitHub.
 
 Если нужный эндпоинт не покрыт — используйте [`client.http`](#низкоуровневый-доступ) напрямую и/или откройте issue.
 

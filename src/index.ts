@@ -26,6 +26,7 @@ export { parsePaginationHeaders, paginate, extractPageFromUrl } from "./paginati
 
 export { AuthResource } from "./resources/auth.js";
 export { BaseResource } from "./resources/base.js";
+export { EpicsResource } from "./resources/epics.js";
 export { IssuesResource } from "./resources/issues.js";
 export { MembershipsResource } from "./resources/memberships.js";
 export { MilestonesResource } from "./resources/milestones.js";
@@ -36,6 +37,7 @@ export { UsersResource } from "./resources/users.js";
 
 export type * from "./types/auth.js";
 export type * from "./types/common.js";
+export type * from "./types/epic.js";
 export type * from "./types/issue.js";
 export type * from "./types/membership.js";
 export type * from "./types/milestone.js";

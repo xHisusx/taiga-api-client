@@ -1,6 +1,7 @@
 import { AuthManager } from "./auth.js";
 import { HttpClient, type FetchLike } from "./http.js";
 import { AuthResource } from "./resources/auth.js";
+import { EpicsResource } from "./resources/epics.js";
 import { IssuesResource } from "./resources/issues.js";
 import { MembershipsResource } from "./resources/memberships.js";
 import { MilestonesResource } from "./resources/milestones.js";
@@ -147,6 +148,7 @@ export class TaigaClient {
   private _tasks?: TasksResource;
   private _issues?: IssuesResource;
   private _milestones?: MilestonesResource;
+  private _epics?: EpicsResource;
 
   /**
    * Construct a new client. See {@link TaigaClientOptions} for every available option.
@@ -218,5 +220,11 @@ export class TaigaClient {
   get milestones(): MilestonesResource {
     if (!this._milestones) this._milestones = new MilestonesResource({ http: this.http });
     return this._milestones;
+  }
+
+  /** Epics: CRUD, bulk_create, related_userstories, voters/watchers, upvote/downvote/watch/unwatch, filters_data. */
+  get epics(): EpicsResource {
+    if (!this._epics) this._epics = new EpicsResource({ http: this.http });
+    return this._epics;
   }
 }
