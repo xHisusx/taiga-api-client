@@ -57,6 +57,20 @@ for await (const issue of client.issues.paginate({ project: projects[0].id })) {
 }
 ```
 
+## 💡 Looking up catalog IDs? Use `filters_data`
+
+Most write operations need numeric IDs of project-specific catalog values (status, type, severity, priority, assignee, …). **Don't fetch each catalog separately** — every resource exposes a `filters_data` method that returns all of them in **one request**, scoped to the project.
+
+```ts
+const data = await client.issues.filtersData({ project: 42 });
+const inProgress = (data.statuses as Array<{ id: number; name: string }>)
+  .find((s) => s.name === "In progress");
+
+await client.issues.create({ project: 42, subject: "...", status: inProgress!.id });
+```
+
+📖 **Read the full guide: [docs/filters-data.md](docs/filters-data.md)** — caching, available endpoints per resource, when it is _not_ enough.
+
 ## Creating the client
 
 **Minimum:**

@@ -14,9 +14,9 @@ TypeScript-клиент для [Taiga REST API](https://docs.taiga.io/api.html).
 
 - 🔐 Bearer-аутентификация с **автоматическим refresh** токена и дедупликацией параллельных refresh-ов
 - 📦 Полный TypeScript: типы для всех ресурсов, payload-ов и параметров
-- 🪶 Zero dependencies в runtime
+- 🚫 Zero dependencies в runtime
 - 🔄 Async-итераторы для пагинации
-- 🛡 Типизированные ошибки (`TaigaApiError`, `TaigaAuthError`, `TaigaRateLimitError`, `TaigaNetworkError`)
+- ⚠️ Типизированные ошибки (`TaigaApiError`, `TaigaAuthError`, `TaigaRateLimitError`, `TaigaNetworkError`)
 - 🚀 Дуальная сборка ESM + CJS, тип-карты `.d.ts` / `.d.cts`
 
 ## Установка
@@ -56,6 +56,20 @@ for await (const issue of client.issues.paginate({ project: projects[0].id })) {
   console.log(`#${issue.ref} ${issue.subject}`);
 }
 ```
+
+## 💡 Нужны ID справочников? Используйте `filters_data`
+
+Большинство пишущих операций требуют числовые ID значений из проектных справочников (статус, тип, severity, priority, исполнитель и т.д.). **Не тяните каждый справочник отдельным запросом** — у каждого ресурса есть метод `filters_data`, который возвращает их все **одним запросом**, scoped к проекту.
+
+```ts
+const data = await client.issues.filtersData({ project: 42 });
+const inProgress = (data.statuses as Array<{ id: number; name: string }>)
+  .find((s) => s.name === "In progress");
+
+await client.issues.create({ project: 42, subject: "...", status: inProgress!.id });
+```
+
+📖 **Полный гайд: [docs/filters-data.ru.md](docs/filters-data.ru.md)** — кеширование, доступные эндпоинты, когда этого _не_ хватает.
 
 ## Создание клиента
 
@@ -315,19 +329,19 @@ await client.issues.watch(issue.id);
 
 Базовый CRUD + следующие методы:
 
-| Метод                                     | HTTP                                          | Описание                                                |
-| ----------------------------------------- | --------------------------------------------- | ------------------------------------------------------- |
-| `bulkCreate(payload)`                     | `POST /epics/bulk_create`                     | Создать несколько эпиков мульти-строкой (по `\n`).      |
-| `filtersData({ project })`                | `GET /epics/filters_data?project=...`         | Доступные фильтры для UI.                               |
-| `relatedUserStories(id)`                  | `GET /epics/:id/related_userstories`          | User-стори, привязанные к эпику.                        |
-| `addRelatedUserStory(id, { user_story })` | `POST /epics/:id/related_userstories`         | Привязать существующую историю к эпику.                 |
-| `removeRelatedUserStory(id, usId)`        | `DELETE /epics/:id/related_userstories/:usId` | Отвязать историю от эпика.                              |
-| `voters(id)`                              | `GET /epics/:id/voters`                       | Список тех, кто проголосовал за эпик.                   |
-| `upvote(id)`                              | `POST /epics/:id/upvote`                      | Проголосовать «за».                                     |
-| `downvote(id)`                            | `POST /epics/:id/downvote`                    | Снять свой голос.                                       |
-| `watchers(id)`                            | `GET /epics/:id/watchers`                     | Список наблюдателей.                                    |
-| `watch(id)`                               | `POST /epics/:id/watch`                       | Подписаться на уведомления.                             |
-| `unwatch(id)`                             | `POST /epics/:id/unwatch`                     | Отписаться.                                             |
+| Метод                                     | HTTP                                          | Описание                                           |
+| ----------------------------------------- | --------------------------------------------- | -------------------------------------------------- |
+| `bulkCreate(payload)`                     | `POST /epics/bulk_create`                     | Создать несколько эпиков мульти-строкой (по `\n`). |
+| `filtersData({ project })`                | `GET /epics/filters_data?project=...`         | Доступные фильтры для UI.                          |
+| `relatedUserStories(id)`                  | `GET /epics/:id/related_userstories`          | User-стори, привязанные к эпику.                   |
+| `addRelatedUserStory(id, { user_story })` | `POST /epics/:id/related_userstories`         | Привязать существующую историю к эпику.            |
+| `removeRelatedUserStory(id, usId)`        | `DELETE /epics/:id/related_userstories/:usId` | Отвязать историю от эпика.                         |
+| `voters(id)`                              | `GET /epics/:id/voters`                       | Список тех, кто проголосовал за эпик.              |
+| `upvote(id)`                              | `POST /epics/:id/upvote`                      | Проголосовать «за».                                |
+| `downvote(id)`                            | `POST /epics/:id/downvote`                    | Снять свой голос.                                  |
+| `watchers(id)`                            | `GET /epics/:id/watchers`                     | Список наблюдателей.                               |
+| `watch(id)`                               | `POST /epics/:id/watch`                       | Подписаться на уведомления.                        |
+| `unwatch(id)`                             | `POST /epics/:id/unwatch`                     | Отписаться.                                        |
 
 ```ts
 const epic = await client.epics.create({
