@@ -7,3 +7,5 @@ coverage/
 .env.local
 .idea/
 .vscode/
+
+local.md

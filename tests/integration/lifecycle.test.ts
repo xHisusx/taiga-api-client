@@ -19,8 +19,8 @@ d("integration: end-to-end project lifecycle", () => {
     await client.auth.login({ username: env.login, password: env.password });
 
     project = await client.projects.create({
-      name: uniqueName("taiga-ts-test"),
-      description: "Temporary project created by taiga-ts integration tests",
+      name: uniqueName("taiga-api-client-test"),
+      description: "Temporary project created by taiga-api-client integration tests",
       is_backlog_activated: true,
       is_kanban_activated: true,
       is_issues_activated: true,
@@ -57,7 +57,7 @@ d("integration: end-to-end project lifecycle", () => {
       const updated = await client.projects.patch(
         project.id,
         { description: "updated by integration test" },
-        ((fresh as unknown as { version: number }).version),
+        (fresh as unknown as { version: number }).version,
       );
       expect(updated.description).toBe("updated by integration test");
     });
@@ -103,11 +103,11 @@ d("integration: end-to-end project lifecycle", () => {
     it("creates a user story", async () => {
       story = await client.userStories.create({
         project: project.id,
-        subject: "Test story from taiga-ts",
+        subject: "Test story from taiga-api-client",
         description: "Created by integration test",
       });
       expect(story.id).toBeTypeOf("number");
-      expect(story.subject).toBe("Test story from taiga-ts");
+      expect(story.subject).toBe("Test story from taiga-api-client");
     });
 
     it("patches the story (OCC)", async () => {

@@ -30,7 +30,7 @@ export const integrationEnv = readEnv();
 export function makeClient(env: IntegrationEnv): TaigaClient {
   return new TaigaClient({
     baseUrl: env.baseUrl,
-    userAgent: "taiga-ts/integration-tests",
+    userAgent: "taiga-api-client/integration-tests",
     timeoutMs: 30_000,
   });
 }
