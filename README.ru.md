@@ -75,17 +75,17 @@ const client = new TaigaClient({
 
   // Аутентификация — выберите один из вариантов (или вообще ни одного,
   // если будете логиниться позже через client.auth.login):
-  token: "...",            // ранее полученный bearer-токен (восстановление сессии)
-  refreshToken: "...",     // парный refresh-токен
+  token: "...", // ранее полученный bearer-токен (восстановление сессии)
+  refreshToken: "...", // парный refresh-токен
   applicationToken: "...", // вместо bearer — статический Application token
 
   // Поведение:
-  autoRefresh: true,       // авто-refresh на 401 (по умолчанию true)
-  timeoutMs: 30_000,       // таймаут запроса в мс (по умолчанию 30000)
+  autoRefresh: true, // авто-refresh на 401 (по умолчанию true)
+  timeoutMs: 30000, // таймаут запроса в мс (по умолчанию 30000)
   userAgent: "my-app/1.0",
   acceptLanguage: "en",
-  apiPrefix: "/api/v1",    // только если у self-hosted нестандартный префикс
-  fetch: customFetch,      // DI: подменить fetch (для прокси/тестов)
+  apiPrefix: "/api/v1", // только если у self-hosted нестандартный префикс
+  fetch: customFetch, // DI: подменить fetch (для прокси/тестов)
 
   // Хук персистентности токенов:
   onTokenChange: async (tokens) => {
@@ -94,8 +94,6 @@ const client = new TaigaClient({
   },
 });
 ```
-
-> 💡 **Про `30_000`** — это [numeric separator](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#numeric_separators) из ES2021, чисто для читаемости больших чисел. Парсер игнорирует подчёркивания: `30_000 === 30000`. К опциональности поля отношения не имеет.
 
 ### Опции `TaigaClientOptions`
 
