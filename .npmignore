@@ -1,0 +1,16 @@
+src/
+tests/
+node_modules/
+coverage/
+.github/
+*.log
+.env*
+.eslintrc*
+eslint.config.*
+.prettierrc*
+tsconfig.json
+tsup.config.*
+vitest.config.*
+bunfig.toml
+bun.lockb
+.gitignore

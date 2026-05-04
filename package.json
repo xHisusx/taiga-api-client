@@ -19,6 +19,7 @@
     "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "lint": "eslint src tests",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run lint && bun run typecheck && bun run test && bun run build"
