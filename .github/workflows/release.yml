@@ -20,14 +20,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # Node 24 ships with npm 11.x which already supports Trusted Publishing
+          # (>= 11.5.1). Avoids the fragile `npm install -g npm@latest` upgrade
+          # that breaks Node 22's bundled npm 10.x in-place.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Upgrade npm (Trusted Publishing requires npm >= 11.5.1)
-        # `--force` works around a known npm bug where in-place upgrade of the
-        # bundled npm leaves its dependency tree half-installed, producing
-        # `Cannot find module 'promise-retry'` on the next invocation.
-        run: npm install -g npm@latest --force
+      - name: Verify npm version supports Trusted Publishing
+        run: |
+          NPM_VERSION=$(npm --version)
+          echo "Using npm $NPM_VERSION"
+          node -e "const v=process.argv[1].split('.').map(Number); if(v[0]<11||(v[0]===11&&v[1]<5)||(v[0]===11&&v[1]===5&&v[2]<1)){console.error('npm '+process.argv[1]+' is too old for Trusted Publishing (need >= 11.5.1)');process.exit(1)}" "$NPM_VERSION"
 
       - name: Verify release tag matches package.json version
         run: |
