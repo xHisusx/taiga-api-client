@@ -24,7 +24,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Upgrade npm (Trusted Publishing requires npm >= 11.5.1)
-        run: npm install -g npm@latest
+        # `--force` works around a known npm bug where in-place upgrade of the
+        # bundled npm leaves its dependency tree half-installed, producing
+        # `Cannot find module 'promise-retry'` on the next invocation.
+        run: npm install -g npm@latest --force
 
       - name: Verify release tag matches package.json version
         run: |
