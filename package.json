@@ -19,14 +19,21 @@
     "LICENSE"
   ],
   "sideEffects": false,
+  "workspaces": [
+    "mcp"
+  ],
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "lint": "eslint src tests",
+    "lint": "eslint src tests mcp/src mcp/tests",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run lint && bun run typecheck && bun run test && bun run build"
+    "prepublishOnly": "bun run lint && bun run typecheck && bun run test && bun run build",
+    "build:mcp": "cd mcp && bun run build",
+    "test:mcp": "cd mcp && bun run test",
+    "test:integration:mcp": "cd mcp && bun run test:integration",
+    "typecheck:mcp": "cd mcp && bun run typecheck"
   },
   "keywords": [
     "taiga",

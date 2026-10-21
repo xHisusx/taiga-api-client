@@ -7,6 +7,8 @@ on:
 jobs:
   publish:
     name: Publish to npm
+    # Tags starting with mcp-v release the MCP server instead (release-mcp.yml).
+    if: "!startsWith(github.ref_name, 'mcp-v')"
     runs-on: ubuntu-latest
     permissions:
       contents: read

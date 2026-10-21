@@ -113,6 +113,8 @@ describe("EpicsResource", () => {
       http.post(`${BASE}/api/v1/epics/4/related_userstories`, async ({ request }) => {
         const body = (await request.json()) as Record<string, unknown>;
         expect(body["user_story"]).toBe(11);
+        // Taiga rejects the request with 400 unless the epic is repeated in the body.
+        expect(body["epic"]).toBe(4);
         return HttpResponse.json({ epic: 4, user_story: 11, order: 1 });
       }),
     );

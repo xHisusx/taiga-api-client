@@ -1,0 +1,57 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.xHisusx/taiga-mcp-server",
+  "description": "Read and manage your own Taiga projects: items, statuses, assignees, sprints, comments",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/xHisusx/taiga-api-client",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/xHisusx/taiga-api-client/tree/main/mcp#readme",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "taiga-api-mcp-server",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "TAIGA_URL",
+          "description": "Taiga instance root, without /api/v1. Taiga Cloud: https://api.taiga.io",
+          "isRequired": true
+        },
+        {
+          "name": "TAIGA_USERNAME",
+          "description": "Taiga username or email, used together with TAIGA_PASSWORD"
+        },
+        {
+          "name": "TAIGA_PASSWORD",
+          "description": "Password for TAIGA_USERNAME",
+          "isSecret": true
+        },
+        {
+          "name": "TAIGA_APP_TOKEN",
+          "description": "Long-lived Application token, instead of a username and password",
+          "isSecret": true
+        },
+        {
+          "name": "TAIGA_PROJECT",
+          "description": "Default project (id, slug or name) for tool calls that omit one"
+        },
+        {
+          "name": "TAIGA_MCP_READ_ONLY",
+          "description": "Set to 1 to register the read tools only",
+          "default": "0"
+        },
+        {
+          "name": "TAIGA_MCP_ALLOW_DELETE",
+          "description": "Set to 1 to also register taiga_delete_item",
+          "default": "0"
+        }
+      ]
+    }
+  ]
+}
