@@ -55,10 +55,15 @@ export class EpicsResource extends BaseResource<Epic, CreateEpicPayload, UpdateE
     return result.data;
   }
 
-  /** `POST /epics/:id/related_userstories` — link an existing user story to the epic. */
+  /**
+   * `POST /epics/:id/related_userstories` — link an existing user story to the epic.
+   *
+   * Taiga requires the epic in the **body** as well as in the path; it is filled in from
+   * `id` automatically, so the payload only has to name the user story.
+   */
   async addRelatedUserStory(id: Id, payload: AddRelatedUserStoryPayload): Promise<EpicRelatedUserStory> {
     const result = await this.http.post<EpicRelatedUserStory>(`/epics/${id}/related_userstories`, {
-      body: payload,
+      body: { epic: id, ...payload },
     });
     return result.data;
   }
