@@ -1,0 +1,99 @@
+name: Release MCP server
+
+# The MCP server is versioned independently of the client, so it gets its own tag
+# prefix: a GitHub release tagged `mcp-v0.1.0` publishes mcp/ to npm and then to the
+# official MCP Registry. Releases tagged `v*` belong to the client (release.yml).
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: Publish taiga-mcp-server
+    if: startsWith(github.ref_name, 'mcp-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Needed twice: npm Trusted Publishing and the MCP Registry's GitHub OIDC login.
+      id-token: write
+    env:
+      # Pin the registry CLI; bump deliberately, the checksum is verified below.
+      MCP_PUBLISHER_VERSION: v1.8.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          # Node 24 ships npm 11.x, which supports Trusted Publishing (>= 11.5.1).
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify npm version supports Trusted Publishing
+        run: |
+          NPM_VERSION=$(npm --version)
+          echo "Using npm $NPM_VERSION"
+          node -e "const v=process.argv[1].split('.').map(Number); if(v[0]<11||(v[0]===11&&v[1]<5)||(v[0]===11&&v[1]===5&&v[2]<1)){console.error('npm '+process.argv[1]+' is too old for Trusted Publishing (need >= 11.5.1)');process.exit(1)}" "$NPM_VERSION"
+
+      - name: Verify the tag, package.json, server.json and SERVER_VERSION agree
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#mcp-v}"
+          PKG_VERSION=$(node -p "require('./mcp/package.json').version")
+          MCP_NAME=$(node -p "require('./mcp/package.json').mcpName")
+          SRV_VERSION=$(node -p "require('./mcp/server.json').version")
+          SRV_NAME=$(node -p "require('./mcp/server.json').name")
+          SRV_PKG_VERSION=$(node -p "require('./mcp/server.json').packages[0].version")
+          SRV_PKG_ID=$(node -p "require('./mcp/server.json').packages[0].identifier")
+          CODE_VERSION=$(node -p "require('fs').readFileSync('mcp/src/server.ts','utf8').match(/SERVER_VERSION = \"([^\"]+)\"/)[1]")
+
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$PKG_VERSION" = "$TAG_VERSION" ] || fail "mcp/package.json version '$PKG_VERSION' does not match tag '$GITHUB_REF_NAME'"
+          [ "$SRV_VERSION" = "$TAG_VERSION" ] || fail "server.json version '$SRV_VERSION' does not match tag '$GITHUB_REF_NAME'"
+          [ "$SRV_PKG_VERSION" = "$TAG_VERSION" ] || fail "server.json packages[0].version '$SRV_PKG_VERSION' does not match tag '$GITHUB_REF_NAME'"
+          [ "$CODE_VERSION" = "$TAG_VERSION" ] || fail "SERVER_VERSION in mcp/src/server.ts is '$CODE_VERSION', not '$TAG_VERSION'"
+          # The registry proves npm ownership by reading mcpName back out of the package.
+          [ "$SRV_NAME" = "$MCP_NAME" ] || fail "server.json name '$SRV_NAME' does not match mcpName '$MCP_NAME'"
+          [ "$SRV_PKG_ID" = "taiga-mcp-server" ] || fail "server.json packages[0].identifier is '$SRV_PKG_ID'"
+          echo "Publishing $MCP_NAME $TAG_VERSION"
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run lint
+      - run: bun run typecheck:mcp
+      - run: bun run test:mcp
+      - run: bun run build:mcp
+
+      - name: Publish to npm via Trusted Publishing (OIDC)
+        working-directory: mcp
+        run: npm publish --access public
+
+      - name: Install mcp-publisher
+        run: |
+          BASE="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          ASSET="mcp-publisher_linux_amd64.tar.gz"
+          curl -fsSL -o "$ASSET" "$BASE/$ASSET"
+          CHECKSUMS="registry_${MCP_PUBLISHER_VERSION#v}_checksums.txt"
+          if curl -fsSL -o "$CHECKSUMS" "$BASE/$CHECKSUMS" && grep -q "$ASSET" "$CHECKSUMS"; then
+            grep "$ASSET" "$CHECKSUMS" | sha256sum -c -
+          else
+            echo "::warning::no checksum published for $ASSET in $MCP_PUBLISHER_VERSION, skipping verification"
+          fi
+          tar xzf "$ASSET" mcp-publisher
+          ./mcp-publisher --version || true
+
+      - name: Publish to the MCP Registry
+        working-directory: mcp
+        run: |
+          ../mcp-publisher login github-oidc
+          # The registry validates the npm package by fetching it, so give the npm
+          # registry a moment to serve the version published a few steps ago.
+          for attempt in 1 2 3; do
+            if ../mcp-publisher publish; then exit 0; fi
+            echo "publish attempt $attempt failed, retrying in 30s"
+            sleep 30
+          done
+          echo "::error::mcp-publisher publish failed three times"
+          exit 1

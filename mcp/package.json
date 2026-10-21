@@ -2,6 +2,7 @@
   "name": "taiga-mcp-server",
   "version": "0.1.0",
   "description": "MCP server for Taiga — read and manage your own Taiga projects from any MCP client",
+  "mcpName": "io.github.xHisusx/taiga-mcp-server",
   "type": "module",
   "bin": {
     "taiga-mcp-server": "./dist/cli.js"
@@ -10,10 +11,12 @@
   "files": [
     "dist",
     "README.md",
-    "README.ru.md"
+    "README.ru.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build",
     "start": "node dist/cli.js",
     "dev": "bun run src/cli.ts",
     "test": "vitest run",
