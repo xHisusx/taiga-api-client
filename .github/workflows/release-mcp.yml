@@ -103,6 +103,26 @@ jobs:
           tar xzf "$ASSET" mcp-publisher
           ./mcp-publisher --version || true
 
+      - name: Wait until npm serves the new version
+        run: |
+          NAME=$(node -p "require('./mcp/package.json').name")
+          VERSION=$(node -p "require('./mcp/package.json').version")
+          URL="https://registry.npmjs.org/$NAME/$VERSION"
+          # The MCP Registry validates the package by fetching exactly this URL, and npm
+          # serves a freshly published version there with a delay. mcp-v0.1.1 died on it:
+          # the retries inside the publish step covered a minute, npm needed longer.
+          for attempt in $(seq 1 40); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL" || true)
+            if [ "$CODE" = "200" ]; then
+              echo "npm serves $NAME@$VERSION (attempt $attempt)"
+              exit 0
+            fi
+            echo "attempt $attempt: npm answered $CODE for $NAME@$VERSION, waiting 15s"
+            sleep 15
+          done
+          echo "::error::npm did not serve $NAME@$VERSION within 10 minutes"
+          exit 1
+
       - name: Publish to the MCP Registry
         working-directory: mcp
         run: |
