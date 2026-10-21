@@ -1,0 +1,52 @@
+{
+  "name": "taiga-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for Taiga — read and manage your own Taiga projects from any MCP client",
+  "type": "module",
+  "bin": {
+    "taiga-mcp-server": "./dist/cli.js"
+  },
+  "main": "./dist/cli.js",
+  "files": [
+    "dist",
+    "README.md",
+    "README.ru.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "start": "node dist/cli.js",
+    "dev": "bun run src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "taiga",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "agent"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xHisusx/taiga-api-client.git",
+    "directory": "mcp"
+  },
+  "homepage": "https://github.com/xHisusx/taiga-api-client/tree/main/mcp#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "taiga-api-client": "^0.2.0",
+    "tsup": "^8",
+    "typescript": "^5",
+    "vitest": "^2"
+  }
+}
