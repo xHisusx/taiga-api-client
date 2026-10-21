@@ -86,10 +86,17 @@ jobs:
         run: |
           BASE="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
           ASSET="mcp-publisher_linux_amd64.tar.gz"
-          curl -fsSL -o "$ASSET" "$BASE/$ASSET"
           CHECKSUMS="registry_${MCP_PUBLISHER_VERSION#v}_checksums.txt"
-          if curl -fsSL -o "$CHECKSUMS" "$BASE/$CHECKSUMS" && grep -q "$ASSET" "$CHECKSUMS"; then
-            grep "$ASSET" "$CHECKSUMS" | sha256sum -c -
+          curl -fsSL -o "$ASSET" "$BASE/$ASSET"
+          # The checksums file also lists <asset>.sbom.json and <asset>.sigstore.json, which
+          # are not downloaded here, so pick the line by an exact file name: a substring
+          # match hands sha256sum files it cannot open and the whole step fails.
+          LINE=""
+          if curl -fsSL -o "$CHECKSUMS" "$BASE/$CHECKSUMS"; then
+            LINE=$(awk -v a="$ASSET" '($NF == a) || ($NF == "*" a)' "$CHECKSUMS")
+          fi
+          if [ -n "$LINE" ]; then
+            printf '%s\n' "$LINE" | sha256sum -c -
           else
             echo "::warning::no checksum published for $ASSET in $MCP_PUBLISHER_VERSION, skipping verification"
           fi
