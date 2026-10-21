@@ -9,7 +9,7 @@ on:
 
 jobs:
   publish:
-    name: Publish taiga-mcp-server
+    name: Publish taiga-api-mcp-server
     if: startsWith(github.ref_name, 'mcp-v')
     runs-on: ubuntu-latest
     permissions:
@@ -41,6 +41,7 @@ jobs:
       - name: Verify the tag, package.json, server.json and SERVER_VERSION agree
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#mcp-v}"
+          PKG_NAME=$(node -p "require('./mcp/package.json').name")
           PKG_VERSION=$(node -p "require('./mcp/package.json').version")
           MCP_NAME=$(node -p "require('./mcp/package.json').mcpName")
           SRV_VERSION=$(node -p "require('./mcp/server.json').version")
@@ -56,7 +57,7 @@ jobs:
           [ "$CODE_VERSION" = "$TAG_VERSION" ] || fail "SERVER_VERSION in mcp/src/server.ts is '$CODE_VERSION', not '$TAG_VERSION'"
           # The registry proves npm ownership by reading mcpName back out of the package.
           [ "$SRV_NAME" = "$MCP_NAME" ] || fail "server.json name '$SRV_NAME' does not match mcpName '$MCP_NAME'"
-          [ "$SRV_PKG_ID" = "taiga-mcp-server" ] || fail "server.json packages[0].identifier is '$SRV_PKG_ID'"
+          [ "$SRV_PKG_ID" = "$PKG_NAME" ] || fail "server.json packages[0].identifier '$SRV_PKG_ID' is not the npm package '$PKG_NAME'"
           echo "Publishing $MCP_NAME $TAG_VERSION"
 
       - run: bun install --frozen-lockfile

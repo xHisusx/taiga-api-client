@@ -59,7 +59,7 @@ for await (const issue of client.issues.paginate({ project: projects[0].id })) {
 
 ## 🤖 MCP-сервер: Taiga для AI-агентов
 
-В этом репозитории также лежит **[taiga-mcp-server](mcp/README.ru.md)** — сервер Model Context
+В этом репозитории также лежит **[taiga-api-mcp-server](mcp/README.ru.md)** — сервер Model Context
 Protocol, построенный на этом клиенте. Подключите MCP-клиент (Claude Code, Claude Desktop,
 Cursor, …) к своей учётке Taiga — и агент сможет смотреть, что назначено на вас, двигать
 статусы, создавать истории, задачи, баги и эпики, назначать исполнителей, ставить оценки,
@@ -69,7 +69,7 @@ Cursor, …) к своей учётке Taiga — и агент сможет с�
 конкретного проекта, так что агенту не нужно угадывать числовые ID.
 
 ```bash
-claude mcp add taiga   --env TAIGA_URL=https://api.taiga.io   --env TAIGA_USERNAME=you@example.com   --env TAIGA_PASSWORD=...   -- npx -y taiga-mcp-server
+claude mcp add taiga   --env TAIGA_URL=https://api.taiga.io   --env TAIGA_USERNAME=you@example.com   --env TAIGA_PASSWORD=...   -- npx -y taiga-api-mcp-server
 ```
 
 📖 **Установка, список инструментов и примеры: [mcp/README.ru.md](mcp/README.ru.md)**

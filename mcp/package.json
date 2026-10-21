@@ -1,10 +1,11 @@
 {
-  "name": "taiga-mcp-server",
+  "name": "taiga-api-mcp-server",
   "version": "0.1.0",
   "description": "MCP server for Taiga — read and manage your own Taiga projects from any MCP client",
   "mcpName": "io.github.xHisusx/taiga-mcp-server",
   "type": "module",
   "bin": {
+    "taiga-api-mcp-server": "./dist/cli.js",
     "taiga-mcp-server": "./dist/cli.js"
   },
   "main": "./dist/cli.js",

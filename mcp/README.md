@@ -1,4 +1,4 @@
-# taiga-mcp-server
+# taiga-api-mcp-server
 
 MCP server for [Taiga](https://taiga.io). Connect your own Taiga account to an MCP client
 (Claude Code, Claude Desktop, Cursor, …) and let it read your work and act on it with your
@@ -34,13 +34,17 @@ that gap, so an agent can work in the terms a human uses:
 
 ```bash
 # from npm
-npx taiga-mcp-server --help
+npx taiga-api-mcp-server --help
 
 # from this repository
 bun install
 bun run build          # builds taiga-api-client into dist/
 bun run build:mcp      # builds mcp/dist/cli.js
 ```
+
+Three names, on purpose: the npm package is **`taiga-api-mcp-server`** (the shorter name
+belongs to an unrelated server), the command it installs is **`taiga-mcp-server`**, and the
+name in the MCP Registry is **`io.github.xHisusx/taiga-mcp-server`**.
 
 ## Credentials
 
@@ -87,7 +91,7 @@ claude mcp add taiga \
   --env TAIGA_URL=https://api.taiga.io \
   --env TAIGA_USERNAME=you@example.com \
   --env TAIGA_PASSWORD=... \
-  -- npx -y taiga-mcp-server
+  -- npx -y taiga-api-mcp-server
 ```
 
 ### Claude Desktop / any client with a JSON config
@@ -97,7 +101,7 @@ claude mcp add taiga \
   "mcpServers": {
     "taiga": {
       "command": "npx",
-      "args": ["-y", "taiga-mcp-server"],
+      "args": ["-y", "taiga-api-mcp-server"],
       "env": {
         "TAIGA_URL": "https://api.taiga.io",
         "TAIGA_USERNAME": "you@example.com",

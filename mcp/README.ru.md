@@ -1,4 +1,4 @@
-# taiga-mcp-server
+# taiga-api-mcp-server
 
 MCP-сервер для [Taiga](https://taiga.io). Подключает вашу учётку Taiga к MCP-клиенту
 (Claude Code, Claude Desktop, Cursor, …) и даёт агенту работать от вашего имени и в рамках
@@ -35,13 +35,17 @@ MCP-сервер для [Taiga](https://taiga.io). Подключает вашу
 
 ```bash
 # из npm
-npx taiga-mcp-server --help
+npx taiga-api-mcp-server --help
 
 # из этого репозитория
 bun install
 bun run build          # собирает taiga-api-client в dist/
 bun run build:mcp      # собирает mcp/dist/cli.js
 ```
+
+Три имени, и это намеренно: пакет в npm — **`taiga-api-mcp-server`** (короткое имя занято
+сторонним сервером), команда после установки — **`taiga-mcp-server`**, а имя в MCP Registry —
+**`io.github.xHisusx/taiga-mcp-server`**.
 
 ## Доступы
 
@@ -88,7 +92,7 @@ claude mcp add taiga \
   --env TAIGA_URL=https://api.taiga.io \
   --env TAIGA_USERNAME=you@example.com \
   --env TAIGA_PASSWORD=... \
-  -- npx -y taiga-mcp-server
+  -- npx -y taiga-api-mcp-server
 ```
 
 ### Claude Desktop и любой клиент с JSON-конфигом
@@ -98,7 +102,7 @@ claude mcp add taiga \
   "mcpServers": {
     "taiga": {
       "command": "npx",
-      "args": ["-y", "taiga-mcp-server"],
+      "args": ["-y", "taiga-api-mcp-server"],
       "env": {
         "TAIGA_URL": "https://api.taiga.io",
         "TAIGA_USERNAME": "you@example.com",

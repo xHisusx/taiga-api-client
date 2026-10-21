@@ -59,7 +59,7 @@ for await (const issue of client.issues.paginate({ project: projects[0].id })) {
 
 ## 🤖 MCP server: Taiga for AI agents
 
-This repository also ships **[taiga-mcp-server](mcp/README.md)** — a Model Context Protocol server
+This repository also ships **[taiga-api-mcp-server](mcp/README.md)** — a Model Context Protocol server
 built on this client. Point an MCP client (Claude Code, Claude Desktop, Cursor, …) at your Taiga
 account and it can read what is assigned to you, move items between statuses, create user stories,
 tasks, issues and epics, assign people, estimate, comment and plan sprints — with your own
@@ -69,7 +69,7 @@ Statuses, members and sprints are addressed **by name**; the server resolves the
 project's own catalogs, so an agent never has to guess a numeric ID.
 
 ```bash
-claude mcp add taiga   --env TAIGA_URL=https://api.taiga.io   --env TAIGA_USERNAME=you@example.com   --env TAIGA_PASSWORD=...   -- npx -y taiga-mcp-server
+claude mcp add taiga   --env TAIGA_URL=https://api.taiga.io   --env TAIGA_USERNAME=you@example.com   --env TAIGA_PASSWORD=...   -- npx -y taiga-api-mcp-server
 ```
 
 📖 **Setup, tool reference and examples: [mcp/README.md](mcp/README.md)**

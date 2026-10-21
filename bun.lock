@@ -17,18 +17,19 @@
       },
     },
     "mcp": {
-      "name": "taiga-mcp-server",
+      "name": "taiga-api-mcp-server",
       "version": "0.1.0",
       "bin": {
+        "taiga-api-mcp-server": "./dist/cli.js",
         "taiga-mcp-server": "./dist/cli.js",
       },
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.32.1",
-        "taiga-api-client": "^0.2.0",
         "zod": "^3.25.76",
       },
       "devDependencies": {
         "@types/node": "^20",
+        "taiga-api-client": "^0.2.0",
         "tsup": "^8",
         "typescript": "^5",
         "vitest": "^2",
@@ -650,7 +651,7 @@
 
     "taiga-api-client": ["taiga-api-client@0.2.0", "", {}, "sha512-cd2jt97s0dQjPCJ7o8IlodjLMHsvP2sz+boPI+/rwrsG8nTFnt/lMZ/FjvBz4IOTaWucbsckzEGZWhiBjcrJgA=="],
 
-    "taiga-mcp-server": ["taiga-mcp-server@workspace:mcp"],
+    "taiga-api-mcp-server": ["taiga-api-mcp-server@workspace:mcp"],
 
     "thenify": ["thenify@3.3.1", "", { "dependencies": { "any-promise": "^1.0.0" } }, "sha512-RVZSIV5IG10Hk3enotrhvz0T9em6cyHBLkH/YAZuKqd8hRkKhSfCGIcP2KUY0EPxndzANBmNllzWPwak+bheSw=="],
 
