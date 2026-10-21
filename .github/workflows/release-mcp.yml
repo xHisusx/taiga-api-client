@@ -69,7 +69,18 @@ jobs:
 
       - name: Publish to npm via Trusted Publishing (OIDC)
         working-directory: mcp
-        run: npm publish --access public
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          # The very first version of a new package has to be published by hand, because npm
+          # only lets a Trusted Publisher be configured for a package that already exists.
+          # Skipping instead of failing lets that version still reach the MCP Registry below,
+          # and makes a re-run of this workflow harmless.
+          if npm view "$NAME@$VERSION" version --no-workspaces >/dev/null 2>&1; then
+            echo "::notice::$NAME@$VERSION is already on npm, skipping the npm publish"
+          else
+            npm publish --access public
+          fi
 
       - name: Install mcp-publisher
         run: |
