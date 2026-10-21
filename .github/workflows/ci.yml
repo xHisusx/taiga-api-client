@@ -31,3 +31,8 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - run: bun run build
+
+      # The MCP server is a separate workspace package that consumes the built client.
+      - run: bun run typecheck:mcp
+      - run: bun run test:mcp
+      - run: bun run build:mcp
