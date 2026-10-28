@@ -47,6 +47,7 @@ describe("tool registration", () => {
     const { client } = await connect();
     const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
+      "taiga_activity",
       "taiga_add_comment",
       "taiga_create_item",
       "taiga_create_sprint",

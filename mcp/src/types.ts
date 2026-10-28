@@ -33,6 +33,8 @@ export interface ItemKind {
   resolverKey: string;
   /** Path segment of the Taiga web UI, e.g. `us` in `/project/slug/us/12`. */
   webSegment: string;
+  /** Collection endpoint of this kind, e.g. `/userstories`. */
+  listPath: string;
   /** Path segment of the `/history/<segment>/<id>` endpoint. */
   historySegment: string;
   /** Key holding this kind in a `/search` response. */
@@ -58,6 +60,7 @@ export const ITEM_KINDS: Record<ItemType, ItemKind> = {
     labelPlural: "user stories",
     resolverKey: "us",
     webSegment: "us",
+    listPath: "/userstories",
     historySegment: "userstory",
     searchKey: "userstories",
     capabilities: CAPS({ milestone: true, dueDate: true, points: true }),
@@ -68,6 +71,7 @@ export const ITEM_KINDS: Record<ItemType, ItemKind> = {
     labelPlural: "tasks",
     resolverKey: "task",
     webSegment: "task",
+    listPath: "/tasks",
     historySegment: "task",
     searchKey: "tasks",
     capabilities: CAPS({ milestone: true, dueDate: true, parentUserStory: true }),
@@ -78,6 +82,7 @@ export const ITEM_KINDS: Record<ItemType, ItemKind> = {
     labelPlural: "issues",
     resolverKey: "issue",
     webSegment: "issue",
+    listPath: "/issues",
     historySegment: "issue",
     searchKey: "issues",
     capabilities: CAPS({ milestone: true, dueDate: true, issueFields: true }),
@@ -88,6 +93,7 @@ export const ITEM_KINDS: Record<ItemType, ItemKind> = {
     labelPlural: "epics",
     resolverKey: "epic",
     webSegment: "epic",
+    listPath: "/epics",
     historySegment: "epic",
     searchKey: "epics",
     capabilities: CAPS({ color: true }),

@@ -68,6 +68,11 @@ permissions and nothing more.
 Statuses, members and sprints are addressed **by name**; the server resolves them against the
 project's own catalogs, so an agent never has to guess a numeric ID.
 
+It also answers **"what did we do last week"** in one call: `taiga_activity` walks the project
+timeline and returns, per card touched in the window, what actually happened to it — status
+moves, closures (including the ones entered days later), comments, sprint moves, attachments.
+Taiga's list endpoints have no date filters, so this is the only way to get a period of work.
+
 ```bash
 claude mcp add taiga   --env TAIGA_URL=https://api.taiga.io   --env TAIGA_USERNAME=you@example.com   --env TAIGA_PASSWORD=...   -- npx -y taiga-api-mcp-server
 ```

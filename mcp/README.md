@@ -72,6 +72,7 @@ in memory only.
 | --- | --- | --- |
 | `TAIGA_WEB_URL` | `tree.taiga.io` for Taiga Cloud, else `TAIGA_URL` | Used to build clickable links |
 | `TAIGA_PROJECT` | — | Default project, so tool calls can omit `project` |
+| `TAIGA_TZ` | `+03:00` | Fixed UTC offset `taiga_activity` resolves its windows in |
 | `TAIGA_MCP_READ_ONLY` | `0` | Register the read tools only |
 | `TAIGA_MCP_ALLOW_DELETE` | `0` | Also register `taiga_delete_item` |
 | `TAIGA_MCP_TOKEN_FILE` | `~/.taiga-mcp/tokens.json` | Token cache location |
@@ -164,6 +165,7 @@ Read (always registered):
 | `taiga_get_item` | One item in full, optionally with its tasks or linked stories |
 | `taiga_search` | Full-text search inside a project |
 | `taiga_list_comments` | The comment thread, and optionally the field changes |
+| `taiga_activity` | What happened in a project over a period, in one call — see [below](#activity-what-happened-over-a-period) |
 
 Write (unless `TAIGA_MCP_READ_ONLY=1`):
 
@@ -198,6 +200,115 @@ was meant.
 > **"Break that story into tasks for the current sprint."**
 > `taiga_create_item` per task with `user_story: 1001` and `sprint: "Sprint 12"`.
 
+> **"What did the team do last week?"**
+> `taiga_activity { projects: ["apollo", "orion"], period: "last_week" }` → one entry per card
+> that was touched, with its status path, what was closed, the comments and the sprint changes.
+
+## Activity: what happened over a period
+
+`taiga_activity` answers "what did we do last week" in a single call, and it is the only way to
+get a period of work out of Taiga: the list endpoints have **no date filters at all**, and
+`modified_date` cannot tell work apart from a card being dragged across a board. Reconstructing a
+week by hand — ordering by `-modified_date`, feeling for the edge of the window, then reading the
+history of every card — costs thousands of tokens per card and gives a different answer depending
+on where the agent decided to stop.
+
+```jsonc
+taiga_activity {
+  "projects": ["apollo", "orion"],
+  "period": "last_week"
+}
+```
+
+```jsonc
+{
+  "window": {
+    "period": "last_week",
+    "since": "2026-10-19T00:00:00+03:00",
+    "until": "2026-10-26T00:00:00+03:00",
+    "tz": "+03:00",
+    "since_utc": "2026-10-18T21:00:00Z",
+    "until_utc": "2026-10-25T21:00:00Z"
+  },
+  "projects": [
+    { "project": "apollo", "project_id": 7, "events_scanned": 316, "events_in_window": 184, "items": 23 },
+    { "project": "orion", "project_id": 8, "events_scanned": 62, "events_in_window": 41, "items": 6 }
+  ],
+  "truncated": false,
+  "items": [
+    {
+      "project": "apollo",
+      "type": "userstory", "id": 1001, "ref": 12,
+      "subject": "Login with SSO",
+      "url": "https://tree.taiga.io/project/apollo/us/12",
+      "status_now": "Done", "tags": ["ui", "auth"], "sprint": "Sprint 2", "assignees": ["bob"],
+      "status_path": ["New", "In Progress", "Done"],
+      "closed_in_period": true,
+      "finish_date": "2026-10-23T16:40:10.112Z",
+      "source": "both",
+      "planning_only": false,
+      "first_event_at": "2026-10-19T12:00:00.000Z",
+      "last_event_at": "2026-10-23T16:40:11.004Z",
+      "events_count": 5,
+      "description_changed": true,
+      "attachments_added": 1, "attachments_removed": 1,
+      "reassigned": [["Alice Example", "Bob Builder"]],
+      "comments": [
+        { "at": "2026-10-19T12:00:00.000Z", "author": "Bob Builder", "text": "Picked this up." }
+      ]
+    }
+  ],
+  "sprints": [
+    { "project": "apollo", "name": "Sprint 2", "change": "closed",
+      "at": "2026-10-24T14:12:03.221Z", "by": "Alice Example" }
+  ]
+}
+```
+
+A task also carries `parent`, the user story above it. With `group_by: "event"` the answer holds
+`events` instead of `items`: the bare chronology, oldest first, one entry per change
+(`created`, `status`, `closed`, `comment`, `sprint`, `assignee`, `attachment`, `description`,
+`subject`, `other`).
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `projects` | `TAIGA_PROJECT` | One project or a list of them (slug, name or id) |
+| `period` | `last_week` | `last_week`, `this_week`, `last_7_days`, `last_14_days`. The rolling two start at local midnight N days back, so the answer holds still for the rest of the day |
+| `since` / `until` | — | Explicit bounds: `"2026-10-19"` or ISO-8601. Not combinable with `period`, and `until` needs `since` |
+| `tz` | `TAIGA_TZ` | Fixed UTC offset the dates are read in (`"+03:00"`, `"Z"`) |
+| `types` | all | `userstory`, `task`, `issue`, `epic`, `milestone` |
+| `group_by` | `item` | `item` sums up each card; `event` returns the chronology |
+| `include_comments` | `true` | Include comment text |
+| `tags` | — | Only cards carrying **all** of these tags |
+| `users` | — | Only events by these people (`"me"` is the authenticated user) |
+| `max_pages` | `20` | Safety stop, at 100 events per page |
+| `comment_chars` | `1500` | Cap on one comment, which is then marked `truncated` |
+| `drop_noise` | `true` | Board positions. `false` is only accepted with `group_by: "event"` |
+
+### What the server decides, so a report does not have to
+
+- **The window is local and half-open.** `[since, until)` in `tz`, and a bare date means the
+  start of that day. `last_week` runs Monday 00:00 to Monday 00:00 — seven whole days, because
+  work done on a Saturday is still work done that week. Both the local bounds and their UTC
+  equivalents come back in `window`: three hours of offset is exactly enough to push a Monday
+  morning out of the week it belongs to.
+- **A closure entered after the fact still counts.** Teams move cards to Done days later, so
+  `closed_in_period` is true either when the window holds the `is_closed` change, or when the
+  card's `finish_date` falls inside it and the card is closed now. `source` says which:
+  `"timeline"`, `"finish_date"` or `"both"`. A card whose only evidence is its finish date has
+  no events in the window and is still reported.
+- **Planning is not work.** `planning_only` marks a card that was only moved between sprints,
+  reassigned, reordered or had its description edited — no status change, no closure, no
+  comment, no attachment. Left to the reader, that call gets made differently every week.
+- **Noise never reaches you.** Board positions (`*_order`) are dropped, `description_diff` — a
+  fixed placeholder, never the actual text — becomes `description_changed`, attachments become
+  counts, and the HTML renderings and tokenized attachment URLs are never emitted at all.
+- **Short data says so.** Paging stops at `since`, not at a page count. If `max_pages` runs out
+  first, `truncated` is true in the answer and on the project — because "nobody did anything"
+  and "the data did not all arrive" are different things to tell a manager.
+- **A project you cannot read does not sink the call.** A `403` is reported against that project
+  and the others still answer; an unknown slug fails the call and lists the projects you have.
+
 ## Field support per item kind
 
 Taiga does not give every field to every kind, and a call that mixes them up is rejected with
@@ -224,7 +335,7 @@ Two Taiga rules the server enforces for you instead of letting the field be drop
 ## Development
 
 ```bash
-bun run test        # 74 tests against an in-memory Taiga (no network)
+bun run test        # 117 tests against an in-memory Taiga (no network)
 bun run typecheck
 bun run build
 ```

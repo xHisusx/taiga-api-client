@@ -1,13 +1,17 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { ResolutionError } from "../catalog.js";
 import { guard } from "../errors.js";
 import { formatCatalog, formatProjectSummary } from "../format.js";
+import type { TargetType } from "../timeline.js";
 import { ITEM_TYPES, type ItemType } from "../types.js";
+import { ACTIVITY_PERIODS } from "../window.js";
 import {
   clampLimit,
   itemTypeSchema,
   locatorShape,
   memberSchema,
+  projectList,
   projectRef,
   projectSchema,
   requireProject,
@@ -264,5 +268,122 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
           },
         ),
       ),
+  );
+
+  server.registerTool(
+    "taiga_activity",
+    {
+      title: "Taiga: what happened over a period",
+      description:
+        "What happened in a project over a period — in one call, instead of walking items one " +
+        "by one. For every user story, task, issue and epic touched inside the window " +
+        "[since, until) it reports what actually happened to it: status moves, closing " +
+        "(including a closure entered after the fact), text comments, sprint moves, " +
+        "attachments. Use it for weekly reports of work done, sprint summaries and questions " +
+        'like "what did we do between the 19th and the 23rd". This is the only way to get a ' +
+        "period of work: Taiga's list endpoints have no date filters, and modified_date does " +
+        "not tell work apart from a card being moved.",
+      inputSchema: {
+        projects: z
+          .union([projectSchema, z.array(projectSchema)])
+          .optional()
+          .describe("One project or several (slug, name or id). Defaults to TAIGA_PROJECT."),
+        period: z
+          .enum(ACTIVITY_PERIODS)
+          .optional()
+          .describe(
+            'Named window, resolved in "tz". "last_week" is Monday 00:00 of the previous ' +
+              "calendar week to Monday 00:00 of this one — seven whole days, so Saturday work " +
+              'is not lost. Defaults to "last_week". Not combinable with since/until.',
+          ),
+        since: z
+          .string()
+          .optional()
+          .describe('Window start, inclusive: "2026-10-19" (start of that day in tz) or ISO-8601.'),
+        until: z
+          .string()
+          .optional()
+          .describe('Window end, exclusive. Needs "since". Defaults to now.'),
+        tz: z
+          .string()
+          .optional()
+          .describe('Fixed UTC offset the dates are read in, e.g. "+03:00". Defaults to TAIGA_TZ.'),
+        types: z
+          .array(z.enum([...ITEM_TYPES, "milestone"]))
+          .optional()
+          .describe('Kinds to report on. Defaults to all. "milestone" covers sprint changes.'),
+        group_by: z
+          .enum(["item", "event"])
+          .optional()
+          .describe(
+            '"item" (default) sums up what happened to each card; "event" returns the bare ' +
+              "chronology, oldest first.",
+          ),
+        include_comments: z
+          .boolean()
+          .optional()
+          .describe("Include comment text. Default true."),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe("Only cards carrying all of these tags."),
+        users: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Only events authored by these people ("me" = the authenticated user). Cards that ' +
+              "surfaced only through a retroactive closure have no author and are left out.",
+          ),
+        max_pages: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(
+            "Safety stop on timeline pages of 100 events. Default 20. Paging normally ends at " +
+              '"since"; hitting this cap instead sets "truncated" in the answer.',
+          ),
+        comment_chars: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Cap on the length of one comment. Default 1500."),
+        drop_noise: z
+          .boolean()
+          .optional()
+          .describe(
+            'Board positions (*_order) are dropped by default. Pass false with group_by: "event" ' +
+              "to see them.",
+          ),
+      },
+      annotations: READ_ONLY,
+    },
+    async (args) =>
+      guard(() => {
+        const groupBy = args.group_by ?? "item";
+        if (args.drop_noise === false && groupBy !== "event") {
+          throw new ResolutionError(
+            'Board positions can only be reported with group_by: "event" — in a per-item ' +
+              "summary they say nothing a report could use.",
+          );
+        }
+
+        return context.activity.activity({
+          projects: projectList(context, args.projects),
+          period: args.period,
+          since: args.since,
+          until: args.until,
+          tz: args.tz,
+          types: (args.types as TargetType[] | undefined) ?? [...ITEM_TYPES, "milestone"],
+          groupBy,
+          includeComments: args.include_comments !== false,
+          tags: args.tags,
+          users: args.users,
+          maxPages: args.max_pages ?? 20,
+          commentChars: args.comment_chars ?? 1500,
+          dropNoise: args.drop_noise !== false,
+        });
+      }),
   );
 }

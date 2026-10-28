@@ -12,6 +12,11 @@ export interface RecordedRequest {
 export interface FakeTaigaOptions {
   /** Force a status code for the first request matching `METHOD /path`. */
   failOnce?: Record<string, { status: number; body: unknown }>;
+  /**
+   * Cap list responses that ask for no page size, as a Taiga that ignores
+   * `x-disable-pagination` does: fewer items than the count in the headers.
+   */
+  listCap?: number;
 }
 
 const ME = {
@@ -47,6 +52,14 @@ const PROJECT_LIST_ENTRY = {
   i_am_admin: true,
   i_am_owner: true,
   i_am_member: true,
+};
+
+const PROJECT_LIST_ENTRY_2 = {
+  ...PROJECT_LIST_ENTRY,
+  id: 8,
+  name: "Orion",
+  slug: "orion",
+  description: "Billing",
 };
 
 const PROJECT_DETAIL = {
@@ -96,6 +109,14 @@ const PROJECT_DETAIL = {
     { id: 902, name: "Sprint 2", slug: "sprint-2", closed: false, estimated_start: "2026-10-15", estimated_finish: "2026-10-28" },
   ],
   tags: ["ui", "backend"],
+};
+
+/** The second project shares the first one's catalogs — only its identity differs. */
+const PROJECT_DETAIL_2 = {
+  ...PROJECT_DETAIL,
+  ...PROJECT_LIST_ENTRY_2,
+  members: PROJECT_DETAIL.members,
+  milestones: PROJECT_DETAIL.milestones,
 };
 
 function userStory(overrides: Record<string, unknown> = {}) {
@@ -174,6 +195,12 @@ function epic(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** `?project=` is honoured by every list endpoint, so one project cannot leak into another. */
+function matchesProject(item: Record<string, unknown>, project: string | undefined): boolean {
+  if (project === undefined) return true;
+  return String(item["project"]) === project;
+}
+
 /** `?epic=` filters user stories by the epics embedded in them, as Taiga does. */
 function matchesEpic(story: Record<string, unknown>, epic: string | undefined): boolean {
   if (epic === undefined) return true;
@@ -209,11 +236,18 @@ export class FakeTaiga {
   readonly requests: RecordedRequest[] = [];
   readonly stories = new Map<number, Record<string, unknown>>();
   readonly tasks = new Map<number, Record<string, unknown>>();
+  /** Issues and epics start empty: only the activity tests populate them. */
+  readonly issues = new Map<number, Record<string, unknown>>();
+  readonly epics = new Map<number, Record<string, unknown>>();
+  /** Project timeline, newest event first — the order Taiga serves it in. */
+  readonly timelines = new Map<number, unknown[]>();
   private readonly failures: Record<string, { status: number; body: unknown }>;
+  private readonly listCap: number | undefined;
   private nextId = 5000;
 
   constructor(options: FakeTaigaOptions = {}) {
     this.failures = { ...(options.failOnce ?? {}) };
+    this.listCap = options.listCap;
     this.stories.set(1001, userStory());
     this.tasks.set(2001, task());
   }
@@ -254,7 +288,7 @@ export class FakeTaiga {
 
   /** One page of a collection, with the full count in the headers — as Taiga answers. */
   private page(items: unknown[], query: Record<string, string>): Response {
-    const perPage = Number(query["page_size"] ?? 30);
+    const perPage = Number(query["page_size"] ?? this.listCap ?? 30);
     const body = paginated(items.slice(0, perPage), perPage, items.length);
     return this.json(body.body, 200, body.headers);
   }
@@ -283,11 +317,14 @@ export class FakeTaiga {
       return this.json(ME);
     }
     if (method === "GET" && path === "/projects") {
-      const page = paginated([PROJECT_LIST_ENTRY]);
+      const page = paginated([PROJECT_LIST_ENTRY, PROJECT_LIST_ENTRY_2]);
       return this.json(page.body, 200, page.headers);
     }
     if (method === "GET" && path === "/projects/7") {
       return this.json(PROJECT_DETAIL);
+    }
+    if (method === "GET" && path === "/projects/8") {
+      return this.json(PROJECT_DETAIL_2);
     }
     if (method === "GET" && path === "/projects/by_slug") {
       return query["slug"] === "apollo" ? this.json(PROJECT_DETAIL) : this.json({}, 404);
@@ -300,6 +337,7 @@ export class FakeTaiga {
 
     if (method === "GET" && path === "/userstories") {
       const items = [...this.stories.values()]
+        .filter((story) => matchesProject(story, query["project"]))
         .filter((story) =>
           query["status"] === undefined ? true : String(story["status"]) === query["status"],
         )
@@ -307,19 +345,41 @@ export class FakeTaiga {
       return this.page(items, query);
     }
     if (method === "GET" && path === "/tasks") {
-      const items = [...this.tasks.values()].filter((task) =>
-        query["user_story"] === undefined
-          ? true
-          : String(task["user_story"]) === query["user_story"],
-      );
+      const items = [...this.tasks.values()]
+        .filter((task) => matchesProject(task, query["project"]))
+        .filter((task) =>
+          query["user_story"] === undefined
+            ? true
+            : String(task["user_story"]) === query["user_story"],
+        );
       return this.page(items, query);
     }
     if (method === "GET" && path === "/epics/3001") {
       return this.json(epic());
     }
-    if (method === "GET" && (path === "/issues" || path === "/epics")) {
-      const page = paginated([]);
-      return this.json(page.body, 200, page.headers);
+    if (method === "GET" && path === "/issues") {
+      return this.page(
+        [...this.issues.values()].filter((issue) => matchesProject(issue, query["project"])),
+        query,
+      );
+    }
+    if (method === "GET" && path === "/epics") {
+      return this.page(
+        [...this.epics.values()].filter((item) => matchesProject(item, query["project"])),
+        query,
+      );
+    }
+
+    const timelineMatch = /^\/timeline\/project\/(\d+)$/.exec(path);
+    if (method === "GET" && timelineMatch) {
+      const events = this.timelines.get(Number(timelineMatch[1])) ?? [];
+      const size = Number(query["page_size"] ?? 100);
+      const current = Number(query["page"] ?? 1);
+      const slice = events.slice((current - 1) * size, current * size);
+      return this.json(slice, 200, {
+        "x-pagination-count": String(events.length),
+        "x-pagination-current": String(current),
+      });
     }
 
     const storyMatch = /^\/userstories\/(\d+)$/.exec(path);
@@ -327,6 +387,12 @@ export class FakeTaiga {
 
     const taskMatch = /^\/tasks\/(\d+)$/.exec(path);
     if (taskMatch) return this.entity(this.tasks, Number(taskMatch[1]), method, body);
+
+    const issueMatch = /^\/issues\/(\d+)$/.exec(path);
+    if (issueMatch) return this.entity(this.issues, Number(issueMatch[1]), method, body);
+
+    const epicMatch = /^\/epics\/(\d+)$/.exec(path);
+    if (epicMatch) return this.entity(this.epics, Number(epicMatch[1]), method, body);
 
     if (method === "POST" && path === "/tasks") {
       const created = task({ ...body, id: this.nextId++, ref: 99, version: 1 });
@@ -462,6 +528,7 @@ export function fakeConfig(overrides: Record<string, unknown> = {}) {
     readOnly: false,
     allowDelete: false,
     tokenFile: null,
+    tz: "+03:00",
     timeoutMs: 5000,
     catalogTtlMs: 60_000,
     maxResults: 100,
