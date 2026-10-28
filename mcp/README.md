@@ -265,10 +265,16 @@ taiga_activity {
 }
 ```
 
-A task also carries `parent`, the user story above it. With `group_by: "event"` the answer holds
-`events` instead of `items`: the bare chronology, oldest first, one entry per change
-(`created`, `status`, `closed`, `comment`, `sprint`, `assignee`, `attachment`, `description`,
-`subject`, `other`).
+A task also carries `parent`, the user story above it — or sits nested under that story with
+`fold_tasks: true`, which is how a weekly report is written. For the report itself, ask for
+`include_planning: false` too: on a busy week more than half the cards were only planned, and
+dropping them roughly halves the answer.
+
+With `group_by: "event"` the answer holds `events` instead of `items`: the bare chronology,
+oldest first, one entry per change. Each carries the `kind` of change (`created`, `status`,
+`closed`, `finish_date`, `comment`, `sprint`, `assignee`, `attachment`, `description`,
+`subject`, `tags`, `other`) **and** the `field` it happened to, so nothing arrives as an
+unnamed "something changed".
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |
@@ -279,9 +285,11 @@ A task also carries `parent`, the user story above it. With `group_by: "event"` 
 | `types` | all | `userstory`, `task`, `issue`, `epic`, `milestone` |
 | `group_by` | `item` | `item` sums up each card; `event` returns the chronology |
 | `include_comments` | `true` | Include comment text |
+| `include_planning` | `true` | `false` drops the cards that were only planned — the cheapest way to cut the answer down to work done |
+| `fold_tasks` | `false` | Nest each task under its parent story. A task whose story is not in the answer stays on its own |
 | `tags` | — | Only cards carrying **all** of these tags |
 | `users` | — | Only events by these people (`"me"` is the authenticated user) |
-| `max_pages` | `20` | Safety stop, at 100 events per page |
+| `max_pages` | `20` | Safety stop, counted in pages of 100 events **that reach into the window** — paging past newer events to get there does not count against it |
 | `comment_chars` | `1500` | Cap on one comment, which is then marked `truncated` |
 | `drop_noise` | `true` | Board positions. `false` is only accepted with `group_by: "event"` |
 
@@ -303,9 +311,17 @@ A task also carries `parent`, the user story above it. With `group_by: "event"` 
 - **Noise never reaches you.** Board positions (`*_order`) are dropped, `description_diff` — a
   fixed placeholder, never the actual text — becomes `description_changed`, attachments become
   counts, and the HTML renderings and tokenized attachment URLs are never emitted at all.
+  The `token` query parameter is also blanked out inside comment text, because
+  people paste attachment links into comments by hand and a comment travels verbatim into a
+  report that is then mailed around.
 - **Short data says so.** Paging stops at `since`, not at a page count. If `max_pages` runs out
   first, `truncated` is true in the answer and on the project — because "nobody did anything"
-  and "the data did not all arrive" are different things to tell a manager.
+  and "the data did not all arrive" are different things to tell a manager. Only the pages that
+  reach into the window are charged to the budget: a week-old window on a project with 60
+  events a day sits behind a page and a half of newer events, and charging that seek to
+  `max_pages` would spend it before the window was reached. If even the 100-page ceiling is
+  spent getting there, the project says `window_reached: false`. A page that fails mid-walk
+  returns what the earlier ones gave, marked `truncated`, rather than failing the call.
 - **A project you cannot read does not sink the call.** A `403` is reported against that project
   and the others still answer; an unknown slug fails the call and lists the projects you have.
 
@@ -335,7 +351,7 @@ Two Taiga rules the server enforces for you instead of letting the field be drop
 ## Development
 
 ```bash
-bun run test        # 117 tests against an in-memory Taiga (no network)
+bun run test        # 128 tests against an in-memory Taiga (no network)
 bun run typecheck
 bun run build
 ```

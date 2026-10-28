@@ -59,12 +59,14 @@ export const ACTIVITY_KINDS = [
   "created",
   "status",
   "closed",
+  "finish_date",
   "comment",
   "sprint",
   "assignee",
   "attachment",
   "description",
   "subject",
+  "tags",
   "other",
 ] as const;
 
@@ -136,6 +138,18 @@ function asDiff(values: unknown): Record<string, unknown> {
 }
 
 /**
+ * Blank out the access token in a link.
+ *
+ * Taiga puts a token in every attachment URL, and people paste those links into comments
+ * by hand. The tool itself only ever reports attachment counts, but a comment travels
+ * verbatim into a report that is then mailed around, and a live token in it is a way into
+ * the file for anyone down that chain.
+ */
+export function maskTokens(text: string): string {
+  return text.replace(/([?&](?:token|auth_token|signature|sig)=)[^&\s"'<>)\]]+/gi, "$1***");
+}
+
+/**
  * Render one side of a `[before, after]` pair.
  *
  * Taiga writes an absent value three ways — `null`, `""` and the literal string `"None"` —
@@ -147,7 +161,7 @@ export function renderValue(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "string") {
     const text = value.trim();
-    return text === "" || text === "None" ? null : text;
+    return text === "" || text === "None" ? null : maskTokens(text);
   }
   if (typeof value === "number" || typeof value === "boolean") return String(value);
   if (Array.isArray(value)) {
@@ -198,7 +212,14 @@ function targetOf(event: TimelineEvent, type: TargetType): EventTarget | null {
 function kindOf(field: string): ActivityKind {
   if (field === "status") return "status";
   if (field === "is_closed") return "closed";
-  if (field === "milestone") return "sprint";
+  if (field === "finish_date" || field === "finished_date") return "finish_date";
+  // "is_closed" belongs to a card, "closed" to a sprint; the estimated dates are a
+  // sprint's own, and all of them read as nonsense under "other".
+  if (field === "closed") return "closed";
+  if (field === "milestone" || field === "estimated_start" || field === "estimated_finish") {
+    return "sprint";
+  }
+  if (field === "tags") return "tags";
   if (field === "assigned_to" || field === "assigned_users") return "assignee";
   if (field === "attachments") return "attachment";
   if (field === "subject" || field === "name") return "subject";
@@ -274,7 +295,8 @@ export function parseEvent(
     });
   }
 
-  const comment = typeof data.comment === "string" ? data.comment.trim() || null : null;
+  const rawComment = typeof data.comment === "string" ? data.comment.trim() : "";
+  const comment = rawComment === "" ? null : maskTokens(rawComment);
   if (parsedType.verb === "create") {
     changes.unshift({ kind: "created", field: "created" });
   } else if (parsedType.verb === "delete") {

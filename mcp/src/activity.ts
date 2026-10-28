@@ -42,6 +42,10 @@ export interface ActivityInput {
   users?: string[] | undefined;
   maxPages: number;
   commentChars: number;
+  /** When false, cards that were only planned are left out of the answer. */
+  includePlanning: boolean;
+  /** When true, a task is nested under its parent story instead of standing alone. */
+  foldTasks: boolean;
   /** Board positions are dropped unless this is explicitly false (events only). */
   dropNoise: boolean;
 }
@@ -63,6 +67,8 @@ interface ProjectOutcome {
   inWindow: number;
   truncated: boolean;
   items: number;
+  /** Set when the page budget ran out before the window was reached at all. */
+  windowReached?: boolean;
   error?: string;
   degraded?: string;
 }
@@ -212,6 +218,7 @@ export class ActivityService {
         events_in_window: outcome.inWindow,
         items: outcome.items,
         ...(outcome.truncated ? { truncated: true } : {}),
+        ...(outcome.windowReached === false ? { window_reached: false } : {}),
         ...(outcome.degraded ? { degraded: outcome.degraded } : {}),
         ...(outcome.error ? { error: outcome.error } : {}),
       })),
@@ -246,6 +253,12 @@ export class ActivityService {
       raw = collected.events;
       outcome.scanned = collected.scanned;
       outcome.truncated = collected.truncated;
+      if (collected.truncated && !collected.reachedWindow) outcome.windowReached = false;
+      if (collected.failure) {
+        outcome.degraded =
+          `The timeline walk stopped early, so the window is only partly covered — ` +
+          collected.failure;
+      }
     } catch (error) {
       if (error instanceof TaigaAuthError && error.status === 403) {
         outcome.error = `This account may not read the activity of project "${catalog.slug}" (403).`;
@@ -281,15 +294,18 @@ export class ActivityService {
     }
 
     const inventory = await this.loadInventory(catalog, itemTypes, accumulators, outcome);
-    const rows = this.assemble(catalog, window, input, itemTypes, accumulators, inventory);
-
-    outcome.items = rows.length;
-    items.push(...rows);
+    const assembled = this.assemble(catalog, window, input, itemTypes, accumulators, inventory);
 
     if (input.groupBy === "event") {
-      const known = new Set(rows.map((row) => `${String(row["type"])}:${String(row["id"])}`));
-      events.push(...this.eventRows(catalog, parsed, input, known));
+      // Whatever a filter removed from the cards is removed from the chronology too.
+      const filtered = Boolean(input.tags?.length) || !input.includePlanning;
+      const known = new Set(assembled.map((row) => `${String(row["type"])}:${String(row["id"])}`));
+      events.push(...this.eventRows(catalog, parsed, input, filtered ? known : null));
     }
+
+    const rows = input.foldTasks ? this.foldTasks(assembled) : assembled;
+    outcome.items = rows.length;
+    items.push(...rows);
 
     return outcome;
   }
@@ -301,30 +317,59 @@ export class ActivityService {
    * walk — the page count is a safety stop, never the real one. When that safety stop is
    * what ended the walk, the result is marked truncated: "nothing happened" and "the data
    * did not all arrive" are different statements to put in front of a manager.
+   *
+   * `maxPages` counts only the pages that actually reach into the window. Everything newer
+   * than `until` has to be paged past first, and on a busy project that seek is pages long
+   * on its own — a week-old window on a project with 60 events a day sits behind one and a
+   * half pages of newer events. Charging the seek to the budget spent it before the window
+   * was reached and answered with nothing at all, while the retroactive closures still came
+   * back from the item lists, so the counters contradicted each other.
    */
   private async fetchTimeline(
     projectId: number,
     window: ActivityWindow,
     maxPages: number,
-  ): Promise<{ events: TimelineEvent[]; scanned: number; truncated: boolean }> {
-    const pages = Math.max(1, Math.min(maxPages, MAX_PAGES_CEILING));
+  ): Promise<{
+    events: TimelineEvent[];
+    scanned: number;
+    truncated: boolean;
+    reachedWindow: boolean;
+    failure: string | null;
+  }> {
+    const budget = Math.max(1, Math.min(maxPages, MAX_PAGES_CEILING));
     const events: TimelineEvent[] = [];
     let scanned = 0;
+    let windowPages = 0;
+    let reachedWindow = false;
     let reachedStart = false;
+    let failure: string | null = null;
 
-    for (let page = 1; page <= pages && !reachedStart; page += 1) {
-      const response = await this.session.run((client) =>
-        client.http.get<TimelineEvent[]>(`/timeline/project/${projectId}`, {
-          query: { page_size: PAGE_SIZE, page },
-        }),
-      );
-      const batch = Array.isArray(response.data) ? response.data : [];
+    let page = 0;
+    while (page < MAX_PAGES_CEILING && !reachedStart && windowPages < budget) {
+      page += 1;
+      let batch: TimelineEvent[];
+      try {
+        const response = await this.session.run((client) =>
+          client.http.get<TimelineEvent[]>(`/timeline/project/${projectId}`, {
+            query: { page_size: PAGE_SIZE, page },
+          }),
+        );
+        batch = Array.isArray(response.data) ? response.data : [];
+      } catch (error) {
+        // Nothing collected yet: let the caller map the failure (a 403 becomes "no access
+        // to this project"). Mid-walk, what the earlier pages gave is worth more than a
+        // failed call, so it is returned and marked truncated.
+        if (events.length === 0) throw error;
+        failure = describeError(error);
+        break;
+      }
       scanned += batch.length;
 
       for (const event of batch) {
         const at = parseInstant(event.created);
         if (at === null) continue;
         if (at >= window.untilMs) continue;
+        reachedWindow = true;
         if (at < window.sinceMs) {
           reachedStart = true;
           break;
@@ -332,6 +377,7 @@ export class ActivityService {
         events.push(event);
       }
 
+      if (reachedWindow) windowPages += 1;
       // A short page is the last page: the project has no older events to reach.
       if (batch.length < PAGE_SIZE) reachedStart = true;
     }
@@ -339,7 +385,7 @@ export class ActivityService {
     // Oldest first from here on: a status path, a first event and a sprint move all read
     // forwards, and the timeline arrives backwards.
     events.reverse();
-    return { events, scanned, truncated: !reachedStart };
+    return { events, scanned, truncated: !reachedStart, reachedWindow, failure };
   }
 
   /** Fold one event into the running state of its item. */
@@ -532,7 +578,51 @@ export class ActivityService {
       }
     }
 
-    return rows;
+    // Planning is more than half of a busy week, and a report that lists it has to read
+    // past it. Dropping it here keeps the per-project counters honest about what is in
+    // the answer.
+    return input.includePlanning ? rows : rows.filter((row) => row["planning_only"] !== true);
+  }
+
+  /**
+   * Nest a task under its parent story.
+   *
+   * A weekly report is written one line per story, with the tasks as the evidence under
+   * it. A task whose story saw no activity in the window — or was dropped by a filter —
+   * has nothing to nest under and stays where it is.
+   */
+  private foldTasks(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+    const stories = new Map<number, Record<string, unknown>>();
+    for (const row of rows) {
+      if (row["type"] === "userstory") stories.set(row["id"] as number, row);
+    }
+
+    const kept: Array<Record<string, unknown>> = [];
+    for (const row of rows) {
+      const parent = row["parent"] as { id?: number } | undefined;
+      const story = row["type"] === "task" && parent?.id !== undefined
+        ? stories.get(parent.id)
+        : undefined;
+      if (!story) {
+        kept.push(row);
+        continue;
+      }
+      const nested = { ...row };
+      // Both are implied by where the task now sits.
+      delete nested["project"];
+      delete nested["parent"];
+      const list = (story["tasks"] as Array<Record<string, unknown>> | undefined) ?? [];
+      list.push(nested);
+      story["tasks"] = list;
+    }
+
+    for (const story of stories.values()) {
+      const list = story["tasks"] as Array<Record<string, unknown>> | undefined;
+      if (!list) continue;
+      const at = (row: Record<string, unknown>): string => String(row["last_event_at"]);
+      list.sort((a, b) => at(b).localeCompare(at(a)));
+    }
+    return kept;
   }
 
   /** Whether `raw` carries a finish date inside the window and is closed right now. */
@@ -652,15 +742,15 @@ export class ActivityService {
     catalog: ProjectCatalog,
     parsed: ParsedEvent[],
     input: ActivityInput,
-    known: Set<string>,
+    known: Set<string> | null,
   ): Array<Record<string, unknown>> {
     const rows: Array<Record<string, unknown>> = [];
 
     for (const entry of parsed) {
       const target = entry.target;
       const isItem = target.type !== "milestone";
-      // A tag filter that removed the item removes its events with it.
-      if (isItem && input.tags?.length && !known.has(`${target.type}:${target.id}`)) continue;
+      // A filter that removed the card removes its events with it.
+      if (isItem && known && !known.has(`${target.type}:${target.id}`)) continue;
 
       const base = {
         at: entry.at,
@@ -679,6 +769,8 @@ export class ActivityService {
         rows.push({
           ...base,
           kind: change.kind,
+          // Without the field name an "other" event says only that something changed.
+          field: change.field,
           ...(change.from !== undefined ? { from: change.from } : {}),
           ...(change.to !== undefined ? { to: change.to } : {}),
         });
