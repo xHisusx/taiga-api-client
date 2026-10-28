@@ -30,8 +30,10 @@ How to use these tools well:
   date filters, so it is the only way to get a period of work — do not try to rebuild one from
   modified_date and per-item history. Judge a story by its tasks (tasks_done of tasks_total) and
   by its statuses, not by finish_date or the is_closed flag: nothing makes anyone fill those in.
-  For a report pass include_planning: false and fold_tasks: true, and verbosity: "compact" when
-  several projects have to fit in one answer.
+  A report is about the window rather than about today, so read the _at_until fields
+  (status_at_until, tasks_done_at_until, all_tasks_done_at_until); status_now, tasks_done and
+  all_tasks_done are current. For a report pass include_planning: false and fold_tasks: true,
+  and verbosity: "compact" when several projects have to fit in one answer.
 - taiga_update_item changes status, assignee, sprint, tags, estimates and can post a comment in
   the same call. It sends the item's version, so a concurrent edit fails loudly instead of being
   overwritten.

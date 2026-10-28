@@ -111,6 +111,8 @@ interface ItemAccumulator {
   comments: Array<Record<string, unknown>>;
   hasWork: boolean;
   hasComment: boolean;
+  /** Attachment and description changes: the part of `work_events_count` counted as it folds. */
+  workChanges: number;
   /** Which kinds of change the window saw. Feeds `event_kinds` and `closure_only`. */
   kinds: Set<string>;
   /** One entry per distinct comment, so an edit does not read as a second comment. */
@@ -122,6 +124,21 @@ interface Inventory {
   byType: Map<ItemType, Map<number, RawItem>>;
   /** Kinds whose full list came back, so a retroactive closure can be spotted in them. */
   complete: Set<ItemType>;
+}
+
+/** Everything one project's walk collected, before it is shaped into rows. */
+interface Collected {
+  accumulators: Map<string, ItemAccumulator>;
+  /**
+   * Per item, the status it sat in when the window ended: the `from` of its first move
+   * after `until`, for the items that moved at all.
+   *
+   * `status_now` is about today and a report is about the window. A card moved to Done on
+   * the Wednesday after the week reads as that week's finished work unless the answer also
+   * says where the week left it.
+   */
+  statusAfter: Map<string, string | null>;
+  inventory: Inventory;
 }
 
 /** Who may have authored an event, resolved per project. */
@@ -165,11 +182,41 @@ function commentKey(author: string | null, text: string): string {
   return `${author ?? ""}\u0000${text.replace(/\s+/g, " ").trim().toLowerCase()}`;
 }
 
+/** Whether an event carries a status move at all, without parsing the rest of it. */
+function hasStatusChange(event: TimelineEvent): boolean {
+  const values = event.data?.values_diff;
+  if (!values || typeof values !== "object" || Array.isArray(values)) return false;
+  return "status" in values;
+}
+
 /** The kinds of change that are closing a card rather than working on it. */
 const CLOSURE_KINDS = new Set(["status", "close_flag", "finish_date"]);
 
 /** Fields a compact answer leaves out even when they are filled in. */
 const COMPACT_DROPPED = new Set(["url", "status_path", "first_event_at"]);
+
+/**
+ * Flags a compact answer keeps even when they say no.
+ *
+ * An absent key reads as `false` for most of them, but not for all: with
+ * `tasks_scope: "all"`, `in_period` is the one thing that tells a task the window touched
+ * from one it did not, and a missing key is a poor way to say "this task did not move".
+ * The counters are here for the same reason — a story with no tasks at all is a fact.
+ */
+const COMPACT_KEPT = new Set([
+  "in_period",
+  "closed_in_period",
+  "reopened_in_period",
+  "status_is_closed",
+  "status_at_until_is_closed",
+  "tasks_total",
+  "tasks_done",
+  "tasks_done_at_until",
+  "all_tasks_done",
+  "all_tasks_done_at_until",
+  "tasks_touched_in_period",
+  "work_events_count",
+]);
 
 /** Whether a value says anything at all. A compact answer omits the ones that do not. */
 function isEmptyValue(value: unknown): boolean {
@@ -189,7 +236,8 @@ function isEmptyValue(value: unknown): boolean {
 function compactRow(row: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(row)) {
-    if (COMPACT_DROPPED.has(key) || isEmptyValue(value)) continue;
+    if (COMPACT_DROPPED.has(key)) continue;
+    if (isEmptyValue(value) && !COMPACT_KEPT.has(key)) continue;
     out[key] = Array.isArray(value) ? value.map(compactValue) : compactValue(value);
   }
   return out;
@@ -324,16 +372,18 @@ export class ActivityService {
     };
 
     let raw: TimelineEvent[];
+    let later: TimelineEvent[];
     try {
-      const collected = await this.fetchTimeline(catalog.id, window, input.maxPages);
-      raw = collected.events;
-      outcome.scanned = collected.scanned;
-      outcome.truncated = collected.truncated;
-      if (collected.truncated && !collected.reachedWindow) outcome.windowReached = false;
-      if (collected.failure) {
+      const walk = await this.fetchTimeline(catalog.id, window, input.maxPages);
+      raw = walk.events;
+      later = walk.later;
+      outcome.scanned = walk.scanned;
+      outcome.truncated = walk.truncated;
+      if (walk.truncated && !walk.reachedWindow) outcome.windowReached = false;
+      if (walk.failure) {
         outcome.degraded =
           `The timeline walk stopped early, so the window is only partly covered — ` +
-          collected.failure;
+          walk.failure;
       }
     } catch (error) {
       if (error instanceof TaigaAuthError && error.status === 403) {
@@ -359,6 +409,18 @@ export class ActivityService {
       parsed.push(entry);
     }
 
+    // Where the window left each card, read off the moves that came after it. Newest
+    // first, so the last one written wins: the first move after `until`.
+    const statusAfter = new Map<string, string | null>();
+    for (const event of later) {
+      const entry = parseEvent(event, { keepOrderFields: false });
+      if (!entry || entry.target.type === "milestone") continue;
+      for (const change of entry.changes) {
+        if (change.kind !== "status") continue;
+        statusAfter.set(`${entry.target.type}:${entry.target.id}`, change.from ?? null);
+      }
+    }
+
     const accumulators = new Map<string, ItemAccumulator>();
     for (const entry of parsed) {
       // A sprint is not a card: its changes are reported through `sprints`.
@@ -376,7 +438,8 @@ export class ActivityService {
         ? [...itemTypes, "task" as ItemType]
         : itemTypes;
     const inventory = await this.loadInventory(catalog, inventoryTypes, accumulators, outcome);
-    const assembled = this.assemble(catalog, window, input, itemTypes, accumulators, inventory);
+    const collected: Collected = { accumulators, statusAfter, inventory };
+    const assembled = this.assemble(catalog, window, input, itemTypes, collected);
 
     if (input.groupBy === "event") {
       // Whatever a filter removed from the cards is removed from the chronology too.
@@ -413,6 +476,8 @@ export class ActivityService {
     maxPages: number,
   ): Promise<{
     events: TimelineEvent[];
+    /** The status moves newer than `until`, newest first. */
+    later: TimelineEvent[];
     scanned: number;
     truncated: boolean;
     reachedWindow: boolean;
@@ -420,6 +485,7 @@ export class ActivityService {
   }> {
     const budget = Math.max(1, Math.min(maxPages, MAX_PAGES_CEILING));
     const events: TimelineEvent[] = [];
+    const later: TimelineEvent[] = [];
     let scanned = 0;
     let windowPages = 0;
     let reachedWindow = false;
@@ -450,7 +516,12 @@ export class ActivityService {
       for (const event of batch) {
         const at = parseInstant(event.created);
         if (at === null) continue;
-        if (at >= window.untilMs) continue;
+        if (at >= window.untilMs) {
+          // These have to be paged past to reach the window at all, and a status move
+          // among them is the only thing that can say where the window left a card.
+          if (hasStatusChange(event)) later.push(event);
+          continue;
+        }
         reachedWindow = true;
         if (at < window.sinceMs) {
           reachedStart = true;
@@ -467,7 +538,9 @@ export class ActivityService {
     // Oldest first from here on: a status path, a first event and a sprint move all read
     // forwards, and the timeline arrives backwards.
     events.reverse();
-    return { events, scanned, truncated: !reachedStart, reachedWindow, failure };
+    // `later` stays newest first: read in that order, the last move seen for a card is the
+    // first one after the window, and the status it moved out of is where `until` left it.
+    return { events, later, scanned, truncated: !reachedStart, reachedWindow, failure };
   }
 
   /** Fold one event into the running state of its item. */
@@ -499,6 +572,7 @@ export class ActivityService {
         comments: [],
         hasWork: false,
         hasComment: false,
+        workChanges: 0,
         kinds: new Set(),
         commentKeys: new Map(),
       };
@@ -524,6 +598,9 @@ export class ActivityService {
         acc.statusEvents.push({ at: entry.at, from: change.from ?? null, to: change.to ?? null });
       }
       if (change.kind === "description") acc.descriptionChanged = true;
+      // Towards `work_events_count`: something was put on the card, not merely recorded
+      // about it.
+      if (change.kind === "description" || change.kind === "attachment") acc.workChanges += 1;
       if (change.kind === "sprint") {
         acc.sprintChanged = true;
         acc.sprint = change.to ?? null;
@@ -654,26 +731,29 @@ export class ActivityService {
     window: ActivityWindow,
     input: ActivityInput,
     itemTypes: ItemType[],
-    accumulators: Map<string, ItemAccumulator>,
-    inventory: Inventory,
+    collected: Collected,
   ): Array<Record<string, unknown>> {
+    const { accumulators, inventory, statusAfter } = collected;
     const rows: Array<Record<string, unknown>> = [];
     const covered = new Set<string>();
 
     // A story whose tasks moved was worked on, however little happened to the story
-    // itself. `closure_only` has to know the difference.
-    const tasksTouched = new Set<number>();
+    // itself. `closure_only` has to know the difference, and a report telling a week's
+    // work from a board being tidied wants the number itself.
+    const tasksTouched = new Map<number, number>();
     for (const acc of accumulators.values()) {
       if (acc.type !== "task") continue;
       const raw = inventory.byType.get("task")?.get(acc.target.id);
       const parent = acc.target.parent?.id ?? raw?.user_story ?? null;
-      if (typeof parent === "number") tasksTouched.add(parent);
+      if (typeof parent !== "number") continue;
+      tasksTouched.set(parent, (tasksTouched.get(parent) ?? 0) + 1);
     }
+    const options = { tasksTouched, statusAfter };
 
     for (const [key, acc] of accumulators) {
       covered.add(key);
       const raw = inventory.byType.get(acc.type)?.get(acc.target.id) ?? null;
-      const row = this.itemRow(catalog, window, input, acc, raw, { tasksTouched });
+      const row = this.itemRow(catalog, window, input, acc, raw, options);
       if (row) rows.push(row);
     }
 
@@ -691,7 +771,7 @@ export class ActivityService {
           // Nobody authored this row, so a filter on authors cannot vouch for it.
           if (input.users?.length) continue;
           const row = this.itemRow(catalog, window, input, null, raw, {
-            tasksTouched,
+            ...options,
             fallbackType: type,
           });
           if (row) rows.push(row);
@@ -710,7 +790,7 @@ export class ActivityService {
       for (const row of kept) delete row["planning_only"];
     }
 
-    this.rollUpTasks(catalog, input, kept, accumulators, inventory);
+    this.rollUpTasks(catalog, input, kept, collected);
     return kept;
   }
 
@@ -727,9 +807,9 @@ export class ActivityService {
     catalog: ProjectCatalog,
     input: ActivityInput,
     rows: Array<Record<string, unknown>>,
-    accumulators: Map<string, ItemAccumulator>,
-    inventory: Inventory,
+    collected: Collected,
   ): void {
+    const { accumulators, inventory } = collected;
     const tasks = inventory.byType.get("task");
     // A partial list would report "3 of 4 done" about a story that has nine tasks.
     if (!tasks || !inventory.complete.has("task")) return;
@@ -748,9 +828,16 @@ export class ActivityService {
       if (row["type"] !== "userstory") continue;
       const list = byStory.get(row["id"] as number) ?? [];
       const done = list.filter((raw) => this.isClosedNow("task", raw, catalog));
+      // And the same counters as of the end of the window, which is what the report is
+      // about: a task moved to Done on the Wednesday after was not done on the Friday.
+      const doneThen = list.filter(
+        (raw) => this.taskAtUntil(catalog, raw, collected).isClosed === true,
+      );
       row["tasks_total"] = list.length;
       row["tasks_done"] = done.length;
+      row["tasks_done_at_until"] = doneThen.length;
       row["all_tasks_done"] = list.length > 0 && done.length === list.length;
+      row["all_tasks_done_at_until"] = list.length > 0 && doneThen.length === list.length;
       if (input.tasksScope !== "all") continue;
 
       // The tasks the window did not touch, named rather than only counted. A task that
@@ -759,13 +846,20 @@ export class ActivityService {
       for (const raw of list) {
         const inPeriod = accumulators.has(`task:${raw.id}`);
         if (inPeriod && input.foldTasks) continue;
+        const statusNow = this.statusNameOf(catalog, "task", raw);
+        const then = this.taskAtUntil(catalog, raw, collected);
         brief.push({
+          project: catalog.slug,
           type: "task",
           id: raw.id,
           ref: raw.ref ?? null,
           subject: raw.subject ?? null,
-          status_now: this.statusNameOf(catalog, "task", raw),
+          status_now: statusNow,
           status_is_closed: this.isClosedNow("task", raw, catalog),
+          // Only where they differ: this task moved after the window, not inside it.
+          ...(then.status !== statusNow
+            ? { status_at_until: then.status, status_at_until_is_closed: then.isClosed }
+            : {}),
           in_period: inPeriod,
         });
       }
@@ -811,6 +905,56 @@ export class ActivityService {
       name,
       is_closed: this.statusIsClosed(catalog, type, name),
     }));
+  }
+
+  /**
+   * The status an item sat in when the window ended.
+   *
+   * `status_now` answers for today, and a report answers for the window. The first move
+   * **after** `until` says where the window left the card — the status it moved out of —
+   * and failing that the last move inside the window does, or the status it sits in now.
+   */
+  private statusAtUntil(
+    catalog: ProjectCatalog,
+    type: ItemType,
+    raw: RawItem | null,
+    acc: ItemAccumulator | null,
+    after: string | null | undefined,
+  ): string | null {
+    if (after !== undefined && after !== null) return after;
+    const last = acc?.statusEvents[acc.statusEvents.length - 1];
+    if (last?.to) return last.to;
+    return raw ? this.statusNameOf(catalog, type, raw) : null;
+  }
+
+  /** Whether the project calls that status closed. */
+  private statusClosedAtUntil(
+    catalog: ProjectCatalog,
+    type: ItemType,
+    raw: RawItem | null,
+    name: string | null,
+  ): boolean | null {
+    const schema = this.statusIsClosed(catalog, type, name);
+    if (schema !== null) return schema;
+    // A status the schema has no name for: what the card says of itself is the best there is.
+    return raw ? this.isClosedNow(type, raw, catalog) : null;
+  }
+
+  /** The same, for one task of a story — which has no row of its own to carry it. */
+  private taskAtUntil(
+    catalog: ProjectCatalog,
+    raw: RawItem,
+    collected: Collected,
+  ): { status: string | null; isClosed: boolean | null } {
+    const key = `task:${raw.id}`;
+    const status = this.statusAtUntil(
+      catalog,
+      "task",
+      raw,
+      collected.accumulators.get(key) ?? null,
+      collected.statusAfter.get(key),
+    );
+    return { status, isClosed: this.statusClosedAtUntil(catalog, "task", raw, status) };
   }
 
   /**
@@ -888,7 +1032,11 @@ export class ActivityService {
     input: ActivityInput,
     acc: ItemAccumulator | null,
     raw: RawItem | null,
-    options: { tasksTouched: Set<number>; fallbackType?: ItemType },
+    options: {
+      tasksTouched: Map<number, number>;
+      statusAfter: Map<string, string | null>;
+      fallbackType?: ItemType;
+    },
   ): Record<string, unknown> | null {
     const type = acc?.type ?? options.fallbackType;
     const id = acc?.target.id ?? raw?.id;
@@ -925,6 +1073,32 @@ export class ActivityService {
     const closedFlagInPeriod = acc?.closedByEvent === true;
     const closedInPeriod = closedByStatus || closedByFinishDate;
 
+    // Four defects were moved to Closed at 15:06 one Thursday and back out at 15:14. The
+    // closure did happen, and four closed defects is still the wrong thing to report.
+    const reopenedInPeriod =
+      acc?.statusEvents.some(
+        (step) =>
+          this.statusIsClosed(catalog, type, step.from) === true &&
+          this.statusIsClosed(catalog, type, step.to) === false,
+      ) === true;
+
+    // Where the window left the card, as against where it stands today.
+    const statusThen = this.statusAtUntil(
+      catalog,
+      type,
+      raw,
+      acc,
+      options.statusAfter.get(`${type}:${id}`),
+    );
+
+    // What was done to the card, as against what was recorded about it: the closing move,
+    // the flag, the date, an assignee and a sprint are bookkeeping, not work.
+    const workEvents =
+      (acc?.workChanges ?? 0) +
+      (acc?.commentKeys.size ?? 0) +
+      (acc?.statusEvents.filter((step) => this.statusIsClosed(catalog, type, step.to) !== true)
+        .length ?? 0);
+
     const source = acc
       ? closedByFinishDate
         ? "both"
@@ -951,6 +1125,8 @@ export class ActivityService {
       ...(acc?.target.parent ? { parent: acc.target.parent } : {}),
       status_now: projection?.["status"] ?? null,
       status_is_closed: raw ? this.isClosedNow(type, raw, catalog) : null,
+      status_at_until: statusThen,
+      status_at_until_is_closed: this.statusClosedAtUntil(catalog, type, raw, statusThen),
       tags,
       sprint: projection?.["sprint"] ?? null,
       assignees: this.assigneesOf(raw, catalog),
@@ -965,6 +1141,7 @@ export class ActivityService {
       event_kinds: eventKinds,
       closed_in_period: closedInPeriod,
       closed_flag_in_period: closedFlagInPeriod,
+      reopened_in_period: reopenedInPeriod,
       closure_only: closureOnly,
       finish_date: finishDate,
       source,
@@ -972,6 +1149,10 @@ export class ActivityService {
       first_event_at: acc?.firstAt ?? null,
       last_event_at: acc?.lastAt ?? null,
       events_count: acc?.events ?? 0,
+      work_events_count: workEvents,
+      ...(type === "userstory"
+        ? { tasks_touched_in_period: options.tasksTouched.get(id) ?? 0 }
+        : {}),
       description_changed: acc?.descriptionChanged ?? false,
       attachments_added: acc?.attachmentsAdded ?? 0,
       attachments_removed: acc?.attachmentsRemoved ?? 0,

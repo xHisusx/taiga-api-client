@@ -74,7 +74,8 @@ moves, closures (including the ones entered days later), comments, sprint moves,
 Taiga's list endpoints have no date filters, so this is the only way to get a period of work.
 Whether a story is finished comes from its tasks (`tasks_done` of `tasks_total`) and whether
 it was closed from the project's own statuses — the dates and the closed flag are filled in by
-hand, and often not at all.
+hand, and often not at all. Both are answered twice over, as of today and as of the end of the
+window, because a card moved to Done three days later is not last week's work.
 
 ```bash
 claude mcp add taiga   --env TAIGA_URL=https://api.taiga.io   --env TAIGA_USERNAME=you@example.com   --env TAIGA_PASSWORD=...   -- npx -y taiga-api-mcp-server
