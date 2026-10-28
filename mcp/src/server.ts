@@ -9,7 +9,7 @@ import { registerDeleteTool, registerWriteTools } from "./tools/write.js";
 import type { ToolContext } from "./tools/schemas.js";
 
 /** Version advertised to MCP clients. Kept in step with `package.json`. */
-export const SERVER_VERSION = "0.3.0";
+export const SERVER_VERSION = "0.4.0";
 
 const INSTRUCTIONS = `Taiga project management, acting as the authenticated Taiga user. Every call is
 subject to that user's own permissions — a 403 means the account may not do it, not that the
