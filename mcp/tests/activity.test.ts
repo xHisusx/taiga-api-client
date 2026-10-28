@@ -208,6 +208,38 @@ async function connect(
   return { fake, activity };
 }
 
+/** `count` events newer than `until`, which the walk has to page past to reach the window. */
+function newerThanWindow(count: number): TimelineEvent[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: 7000 + index,
+    created: new Date(Date.parse("2026-10-28T06:00:00.000Z") - index * 1_000).toISOString(),
+    event_type: "userstories.userstory.change",
+    object_id: 1001,
+    project: 7,
+    data: {
+      user: { id: 1, name: "Alice Example" },
+      userstory: { id: 1001, ref: 12, subject: "Login with SSO" },
+      values_diff: { status: ["Done", "Done"] },
+    },
+  }));
+}
+
+/** `count` events inside the window, newest first. */
+function insideWindow(count: number): TimelineEvent[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: 8000 + index,
+    created: new Date(Date.parse("2026-10-24T12:00:00.000Z") - index * 60_000).toISOString(),
+    event_type: "userstories.userstory.change",
+    object_id: 1001,
+    project: 7,
+    data: {
+      user: { id: 1, name: "Alice Example" },
+      userstory: { id: 1001, ref: 12, subject: "Login with SSO" },
+      values_diff: { status: ["In Progress", "In Progress"] },
+    },
+  }));
+}
+
 /** One item of the answer, by `#ref`. */
 function byRef(payload: ActivityPayload, ref: number): ActivityItem | undefined {
   return payload.items?.find((entry) => entry.ref === ref);
@@ -690,5 +722,211 @@ describe("taiga_activity: shaping the answer", () => {
         by: "Alice Example",
       },
     ]);
+  });
+});
+
+describe("taiga_activity: reaching the window", () => {
+  it("does not spend the page budget getting past the newer events", async () => {
+    const { fake, activity } = await connect();
+    // A week-old window on a busy project sits behind a page and a half of newer events:
+    // charging that seek to max_pages used to answer with nothing at all.
+    fake.timelines.set(7, [...newerThanWindow(100), ...APOLLO_TIMELINE]);
+
+    const payload = (await activity({ ...LAST_WEEK, max_pages: 1 })).payload();
+
+    expect(payload.projects[0]).toMatchObject({
+      events_scanned: 116,
+      events_in_window: 13,
+    });
+    expect(byRef(payload, 12)).toMatchObject({ closed_in_period: true });
+    expect(fake.find("GET", "/timeline/project/7")).toHaveLength(2);
+  });
+
+  it("returns the pages it did collect when the budget runs out inside the window", async () => {
+    const { activity, fake } = await connect();
+    fake.timelines.set(7, [...newerThanWindow(100), ...insideWindow(100), ...APOLLO_TIMELINE]);
+
+    const payload = (await activity({ ...LAST_WEEK, max_pages: 1 })).payload();
+
+    // One page of the window was collected and handed over, not thrown away.
+    expect(payload.truncated).toBe(true);
+    expect(payload.projects[0]).toMatchObject({ truncated: true, events_in_window: 100 });
+    expect(byRef(payload, 12)?.["events_count"]).toBe(100);
+  });
+
+  it("says when the window was never reached at all", async () => {
+    const { activity, fake } = await connect();
+    // 100 pages of nothing but newer events: the hard ceiling, not max_pages.
+    fake.timelines.set(7, newerThanWindow(10_000));
+
+    const payload = (await activity({ ...LAST_WEEK, max_pages: 50 })).payload();
+
+    expect(payload.projects[0]).toMatchObject({
+      events_scanned: 10_000,
+      events_in_window: 0,
+      truncated: true,
+      window_reached: false,
+    });
+    expect(fake.find("GET", "/timeline/project/7")).toHaveLength(100);
+  });
+
+  it("keeps what it collected when a page fails mid-walk", async () => {
+    const { activity, fake } = await connect(
+      {},
+      {
+        failOnce: {
+          "GET /timeline/project/7?page=2": { status: 500, body: { _error_message: "boom" } },
+        },
+      },
+    );
+    fake.timelines.set(7, [...insideWindow(100), ...APOLLO_TIMELINE]);
+
+    const payload = (await activity(LAST_WEEK)).payload();
+
+    expect(payload.projects[0]).toMatchObject({ events_in_window: 100, truncated: true });
+    expect(String(payload.projects[0]?.["degraded"])).toMatch(/stopped early.*500/);
+    expect(byRef(payload, 12)?.["events_count"]).toBe(100);
+  });
+
+  it("still reports a project it may not read at all", async () => {
+    const { activity } = await connect(
+      {},
+      {
+        failOnce: {
+          "GET /timeline/project/7?page=1": { status: 403, body: { _error_message: "no" } },
+        },
+      },
+    );
+    const payload = (await activity(LAST_WEEK)).payload();
+
+    expect(payload.projects[0]?.["error"]).toMatch(/may not read the activity/);
+  });
+});
+
+describe("taiga_activity: a report of work done", () => {
+  it("drops the cards that were only planned", async () => {
+    const { activity } = await connect();
+    const full = (await activity(LAST_WEEK)).payload();
+    const work = (await activity({ ...LAST_WEEK, include_planning: false })).payload();
+
+    const byNumber = (a: unknown, b: unknown): number => Number(a) - Number(b);
+    const planned = (full.items ?? []).filter((entry) => entry["planning_only"] === true);
+    expect(planned.map((entry) => entry.ref).sort(byNumber)).toEqual([13, 15, 17]);
+
+    expect(work.items?.every((entry) => entry["planning_only"] === false)).toBe(true);
+    expect(work.items?.map((entry) => entry.ref).sort(byNumber)).toEqual([12, 14, 34, 97, 183]);
+    // The per-project count follows the answer, rather than describing a longer one.
+    expect(work.projects[0]).toMatchObject({ items: 5 });
+  });
+
+  it("takes the events of a dropped card out of the chronology too", async () => {
+    const { activity } = await connect();
+    const payload = (
+      await activity({ ...LAST_WEEK, group_by: "event", include_planning: false })
+    ).payload();
+
+    expect(payload.events?.some((event) => event["ref"] === 13)).toBe(false);
+    expect(payload.events?.some((event) => event["ref"] === 12)).toBe(true);
+  });
+
+  it("nests a task under its parent story", async () => {
+    const { activity } = await connect();
+    const payload = (await activity({ ...LAST_WEEK, fold_tasks: true })).payload();
+
+    expect(byRef(payload, 34)).toBeUndefined();
+    const tasks = byRef(payload, 12)?.["tasks"] as Array<Record<string, unknown>>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ type: "task", ref: 34, status_path: ["New", "In progress"] });
+    // Both are implied by where the task now sits.
+    expect(tasks[0]).not.toHaveProperty("project");
+    expect(tasks[0]).not.toHaveProperty("parent");
+  });
+
+  it("leaves a task alone when its story is not in the answer", async () => {
+    const { fake, activity } = await connect();
+    // The task moved, its story did not — and the story has no finish date to bring it
+    // into the answer either, so there is nothing to nest under.
+    const orphan: TimelineEvent = {
+      id: 9996,
+      created: "2026-10-22T08:15:00.000Z",
+      event_type: "tasks.task.change",
+      object_id: 2001,
+      project: 7,
+      data: {
+        user: { id: 1, name: "Alice Example" },
+        task: {
+          id: 2001,
+          ref: 34,
+          subject: "Wire up the OIDC callback",
+          userstory: { id: 1002, ref: 13, subject: "Rotate the signing keys" },
+        },
+        values_diff: { status: ["New", "In progress"] },
+      },
+    };
+    fake.timelines.set(7, [orphan]);
+
+    const payload = (await activity({ ...LAST_WEEK, fold_tasks: true })).payload();
+
+    expect(byRef(payload, 34)).toMatchObject({ type: "task", project: "apollo" });
+    expect(byRef(payload, 13)).toBeUndefined();
+  });
+});
+
+describe("taiga_activity: naming what changed", () => {
+  it("names the field of every change, so no event is just other", async () => {
+    const { fake, activity } = await connect();
+    const tagged: TimelineEvent = {
+      id: 9998,
+      created: "2026-10-21T09:00:00.000Z",
+      event_type: "userstories.userstory.change",
+      object_id: 1002,
+      project: 7,
+      data: {
+        user: { id: 1, name: "Alice Example" },
+        userstory: { id: 1002, ref: 13, subject: "Rotate the signing keys" },
+        values_diff: { tags: [null, "bugfix"] },
+      },
+    };
+    fake.timelines.set(7, [...APOLLO_TIMELINE.slice(0, 8), tagged, ...APOLLO_TIMELINE.slice(8)]);
+
+    const payload = (await activity({ ...LAST_WEEK, group_by: "event" })).payload();
+    const changes = (payload.events ?? []).filter((event) => event["kind"] !== "comment");
+
+    expect(changes.every((event) => typeof event["field"] === "string")).toBe(true);
+    // Tags and the finish date used to arrive as a nameless "other".
+    expect(payload.events).toContainEqual(
+      expect.objectContaining({ kind: "tags", field: "tags", to: "bugfix" }),
+    );
+    expect(payload.events).toContainEqual(
+      expect.objectContaining({ kind: "finish_date", field: "finish_date", from: null }),
+    );
+    expect(changes.some((event) => event["kind"] === "other" && event["from"] !== undefined)).toBe(
+      false,
+    );
+  });
+
+  it("masks the access token in a link somebody pasted into a comment", async () => {
+    const { fake, activity } = await connect();
+    const pasted: TimelineEvent = {
+      id: 9997,
+      created: "2026-10-21T09:00:00.000Z",
+      event_type: "issues.issue.change",
+      object_id: 4001,
+      project: 7,
+      data: {
+        user: { id: 2, name: "Bob Builder" },
+        issue: { id: 4001, ref: 183, subject: "Login loops on Safari" },
+        comment:
+          "Log is here: https://taiga.test/media/attachments/8/safari.har?token=auICDQ%3AsecretVALUE",
+        values_diff: [],
+      },
+    };
+    fake.timelines.set(7, [...APOLLO_TIMELINE.slice(0, 4), pasted, ...APOLLO_TIMELINE.slice(4)]);
+
+    const payload = (await activity(LAST_WEEK)).payload();
+    const serialized = JSON.stringify(payload);
+
+    expect(serialized).not.toContain("secretVALUE");
+    expect(serialized).toContain("safari.har?token=***");
   });
 });

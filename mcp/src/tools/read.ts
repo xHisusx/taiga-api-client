@@ -282,7 +282,8 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
         "attachments. Use it for weekly reports of work done, sprint summaries and questions " +
         'like "what did we do between the 19th and the 23rd". This is the only way to get a ' +
         "period of work: Taiga's list endpoints have no date filters, and modified_date does " +
-        "not tell work apart from a card being moved.",
+        "not tell work apart from a card being moved. For a report, ask for " +
+        "include_planning: false and fold_tasks: true — that is work done, one line per story.",
       inputSchema: {
         projects: z
           .union([projectSchema, z.array(projectSchema)])
@@ -323,6 +324,24 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
           .boolean()
           .optional()
           .describe("Include comment text. Default true."),
+        include_planning: z
+          .boolean()
+          .optional()
+          .describe(
+            "Default true. Pass false to drop the cards that were only planned — moved " +
+              "between sprints, reassigned, reordered or had their description edited, with " +
+              "no status change, closure, comment or attachment. On a busy week that is more " +
+              "than half the cards, so it is the cheapest way to cut the answer down to work " +
+              "actually done.",
+          ),
+        fold_tasks: z
+          .boolean()
+          .optional()
+          .describe(
+            "Nest each task under its parent user story instead of listing it separately, " +
+              "which is how a weekly report is written: one line per story, the tasks as the " +
+              "evidence under it. A task whose story saw no activity stays on its own.",
+          ),
         tags: z
           .array(z.string())
           .optional()
@@ -340,8 +359,9 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
           .positive()
           .optional()
           .describe(
-            "Safety stop on timeline pages of 100 events. Default 20. Paging normally ends at " +
-              '"since"; hitting this cap instead sets "truncated" in the answer.',
+            "Safety stop, counted in pages of 100 events that reach into the window — paging " +
+              "past the newer events to get there does not count against it. Default 20. " +
+              'Paging normally ends at "since"; hitting this cap instead sets "truncated".',
           ),
         comment_chars: z
           .number()
@@ -371,6 +391,8 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
 
         return context.activity.activity({
           projects: projectList(context, args.projects),
+          includePlanning: args.include_planning !== false,
+          foldTasks: args.fold_tasks === true,
           period: args.period,
           since: args.since,
           until: args.until,

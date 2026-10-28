@@ -10,7 +10,10 @@ export interface RecordedRequest {
 }
 
 export interface FakeTaigaOptions {
-  /** Force a status code for the first request matching `METHOD /path`. */
+  /**
+   * Force a status code for the first request matching `METHOD /path`, or
+   * `METHOD /path?page=N` to single out one page of a paginated walk.
+   */
   failOnce?: Record<string, { status: number; body: unknown }>;
   /**
    * Cap list responses that ask for no page size, as a Taiga that ignores
@@ -270,7 +273,9 @@ export class FakeTaiga {
         authorization: headers.get("authorization"),
       });
 
-      const failureKey = `${method} ${path}`;
+      const pagedKey = query["page"] ? `${method} ${path}?page=${query["page"]}` : null;
+      const failureKey =
+        pagedKey && this.failures[pagedKey] ? pagedKey : `${method} ${path}`;
       const failure = this.failures[failureKey];
       if (failure) {
         delete this.failures[failureKey];
