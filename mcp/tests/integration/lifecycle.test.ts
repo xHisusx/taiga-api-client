@@ -64,6 +64,7 @@ suite("integration: MCP tools against a live Taiga", () => {
       allowDelete: true,
       tokenFile: null,
       defaultProject: project.slug,
+      tz: "+00:00",
       timeoutMs: 30_000,
       catalogTtlMs: 60_000,
       maxResults: 100,

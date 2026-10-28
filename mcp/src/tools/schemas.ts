@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ActivityService } from "../activity.js";
 import { ResolutionError, type CatalogService, type ProjectRef } from "../catalog.js";
 import type { TaigaMcpConfig } from "../config.js";
 import type { ItemService } from "../items.js";
@@ -10,6 +11,7 @@ export interface ToolContext {
   session: TaigaSession;
   catalogs: CatalogService;
   items: ItemService;
+  activity: ActivityService;
   config: TaigaMcpConfig;
 }
 
@@ -57,6 +59,20 @@ export function projectRef(
   value: ProjectRef | undefined,
 ): ProjectRef | undefined {
   return value ?? context.config.defaultProject;
+}
+
+/**
+ * Resolve the project list of a call that may span several projects.
+ *
+ * Returns an empty list rather than throwing, so the tool can name itself in the error.
+ */
+export function projectList(
+  context: ToolContext,
+  value: ProjectRef | ProjectRef[] | undefined,
+): ProjectRef[] {
+  if (Array.isArray(value)) return value;
+  if (value !== undefined) return [value];
+  return context.config.defaultProject !== undefined ? [context.config.defaultProject] : [];
 }
 
 /** Same, but for tools that cannot work without a project. */

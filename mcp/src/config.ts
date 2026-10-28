@@ -20,6 +20,14 @@ export interface TaigaMcpConfig {
   tokenFile: string | null;
   /** Project (id, slug or name) used when a tool call omits `project`. */
   defaultProject?: string;
+  /**
+   * Fixed UTC offset the activity windows are resolved in, e.g. `"+03:00"`.
+   *
+   * A window is a statement about local working days, so it cannot be resolved in UTC
+   * without moving its edges by the offset — three hours is enough to drop a Monday
+   * morning out of the week it belongs to.
+   */
+  tz: string;
   /** Per-request timeout passed to the Taiga client. */
   timeoutMs: number;
   /** How long a project catalog stays cached. */
@@ -54,6 +62,7 @@ Credentials — pick exactly one of:
 
 Behaviour:
   TAIGA_PROJECT             default project (id, slug or name) for tools that take one
+  TAIGA_TZ                  UTC offset for taiga_activity windows, default +03:00
   TAIGA_MCP_READ_ONLY=1     register read tools only
   TAIGA_MCP_ALLOW_DELETE=1  also register taiga_delete_item (off by default)
   TAIGA_MCP_TOKEN_FILE      token cache path (default ~/.taiga-mcp/tokens.json)
@@ -196,6 +205,7 @@ export function loadConfig(
     ...(clean(flags["project"]) ?? clean(env["TAIGA_PROJECT"])
       ? { defaultProject: (clean(flags["project"]) ?? clean(env["TAIGA_PROJECT"])) as string }
       : {}),
+    tz: clean(env["TAIGA_TZ"]) ?? clean(env["TAIGA_TIMEZONE"]) ?? "+03:00",
     timeoutMs: asInt(env["TAIGA_MCP_TIMEOUT_MS"], 30_000),
     catalogTtlMs: asInt(env["TAIGA_MCP_CATALOG_TTL_MS"], 300_000),
     maxResults: Math.min(asInt(env["TAIGA_MCP_MAX_RESULTS"], 100), 500),
