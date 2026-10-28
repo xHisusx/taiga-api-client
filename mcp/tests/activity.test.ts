@@ -240,6 +240,12 @@ function insideWindow(count: number): TimelineEvent[] {
   }));
 }
 
+/** What a compact answer leaves out: the values that say nothing. */
+function isEmpty(value: unknown): boolean {
+  if (value === null || value === false || value === 0 || value === "") return true;
+  return Array.isArray(value) && value.length === 0;
+}
+
 /** One item of the answer, by `#ref`. */
 function byRef(payload: ActivityPayload, ref: number): ActivityItem | undefined {
   return payload.items?.find((entry) => entry.ref === ref);
@@ -322,8 +328,27 @@ describe("taiga_activity: what happened to a card", () => {
       tags: ["ui", "auth"],
       sprint: "Sprint 2",
       assignees: ["bob"],
-      status_path: ["New", "In Progress", "Done"],
+      status_is_closed: true,
+      status_path: [
+        { name: "New", is_closed: false },
+        { name: "In Progress", is_closed: false },
+        { name: "Done", is_closed: true },
+      ],
+      event_kinds: [
+        "assignee",
+        "attachment",
+        "close_flag",
+        "comment",
+        "description",
+        "finish_date",
+        "status",
+      ],
       closed_in_period: true,
+      closed_flag_in_period: true,
+      closure_only: false,
+      tasks_total: 1,
+      tasks_done: 0,
+      all_tasks_done: false,
       source: "both",
       planning_only: false,
       first_event_at: "2026-10-19T12:00:00.000Z",
@@ -348,7 +373,10 @@ describe("taiga_activity: what happened to a card", () => {
     expect(byRef((await activity(LAST_WEEK)).payload(), 34)).toMatchObject({
       type: "task",
       parent: { type: "userstory", id: 1001, ref: 12, subject: "Login with SSO" },
-      status_path: ["New", "In progress"],
+      status_path: [
+        { name: "New", is_closed: false },
+        { name: "In progress", is_closed: false },
+      ],
     });
   });
 
@@ -388,7 +416,8 @@ describe("taiga_activity: what happened to a card", () => {
 describe("taiga_activity: the rules a report would otherwise invent", () => {
   it("reports a closure entered after the fact, with no event in the window", async () => {
     const { activity } = await connect();
-    const story = byRef((await activity(LAST_WEEK)).payload(), 14);
+    const asked = { ...LAST_WEEK, include_by_finish_date: true };
+    const story = byRef((await activity(asked)).payload(), 14);
 
     expect(story).toMatchObject({
       type: "userstory",
@@ -402,6 +431,12 @@ describe("taiga_activity: the rules a report would otherwise invent", () => {
       last_event_at: null,
       planning_only: false,
       status_now: "Done",
+      status_is_closed: true,
+      // Nobody saw it happen, so there is no status path and nothing was only closed.
+      status_events: [],
+      event_kinds: [],
+      closed_flag_in_period: false,
+      closure_only: false,
     });
   });
 
@@ -496,7 +531,7 @@ describe("taiga_activity: collection", () => {
         project_id: 7,
         events_scanned: 16,
         events_in_window: 13,
-        items: 8,
+        items: 7,
       },
     ]);
     expect(payload.truncated).toBe(false);
@@ -556,7 +591,9 @@ describe("taiga_activity: collection", () => {
 
   it("does not pass off one page as the whole project", async () => {
     const { fake, activity } = await connect({}, { listCap: 2 });
-    const payload = (await activity(LAST_WEEK)).payload();
+    const payload = (
+      await activity({ ...LAST_WEEK, include_by_finish_date: true })
+    ).payload();
 
     expect(String(payload.projects[0]?.["degraded"])).toMatch(
       /user stories: Taiga paginated the list anyway \(2 of 6\)/,
@@ -673,7 +710,9 @@ describe("taiga_activity: shaping the answer", () => {
 
   it("keeps only the cards carrying every requested tag", async () => {
     const { activity } = await connect();
-    const payload = (await activity({ ...LAST_WEEK, tags: ["support"] })).payload();
+    const payload = (
+      await activity({ ...LAST_WEEK, tags: ["support"], include_by_finish_date: true })
+    ).payload();
 
     expect(payload.items?.map((entry) => entry.id).sort()).toEqual([1003, 4001]);
     expect(payload["filters"]).toEqual({ tags: ["support"] });
@@ -681,7 +720,9 @@ describe("taiga_activity: shaping the answer", () => {
 
   it("keeps only the events of the people that were asked for", async () => {
     const { activity } = await connect();
-    const payload = (await activity({ ...LAST_WEEK, users: ["bob"] })).payload();
+    const payload = (
+      await activity({ ...LAST_WEEK, users: ["bob"], include_by_finish_date: true })
+    ).payload();
 
     const authors = new Set(
       (payload.items ?? []).flatMap((entry) =>
@@ -813,10 +854,11 @@ describe("taiga_activity: a report of work done", () => {
     const planned = (full.items ?? []).filter((entry) => entry["planning_only"] === true);
     expect(planned.map((entry) => entry.ref).sort(byNumber)).toEqual([13, 15, 17]);
 
-    expect(work.items?.every((entry) => entry["planning_only"] === false)).toBe(true);
-    expect(work.items?.map((entry) => entry.ref).sort(byNumber)).toEqual([12, 14, 34, 97, 183]);
+    // With planning gone the flag is false on every row that is left, so it is not sent.
+    expect(work.items?.every((entry) => !("planning_only" in entry))).toBe(true);
+    expect(work.items?.map((entry) => entry.ref).sort(byNumber)).toEqual([12, 34, 97, 183]);
     // The per-project count follows the answer, rather than describing a longer one.
-    expect(work.projects[0]).toMatchObject({ items: 5 });
+    expect(work.projects[0]).toMatchObject({ items: 4 });
   });
 
   it("takes the events of a dropped card out of the chronology too", async () => {
@@ -836,9 +878,10 @@ describe("taiga_activity: a report of work done", () => {
     expect(byRef(payload, 34)).toBeUndefined();
     const tasks = byRef(payload, 12)?.["tasks"] as Array<Record<string, unknown>>;
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]).toMatchObject({ type: "task", ref: 34, status_path: ["New", "In progress"] });
-    // Both are implied by where the task now sits.
-    expect(tasks[0]).not.toHaveProperty("project");
+    expect(tasks[0]).toMatchObject({ type: "task", ref: 34, status_now: "In progress" });
+    // The parent is implied by where the task now sits. The project is not: sorting the
+    // answer by project would otherwise lose every nested task.
+    expect(tasks[0]).toMatchObject({ project: "apollo" });
     expect(tasks[0]).not.toHaveProperty("parent");
   });
 
@@ -928,5 +971,265 @@ describe("taiga_activity: naming what changed", () => {
 
     expect(serialized).not.toContain("secretVALUE");
     expect(serialized).toContain("safari.har?token=***");
+  });
+});
+
+describe("taiga_activity: the task composition of a story", () => {
+  /** The question a report answers about a story is whether its tasks are done. */
+  function secondTask(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return item({
+      id: 2002,
+      ref: 35,
+      subject: "Document the callback",
+      status: 201,
+      status_extra_info: { name: "New", is_closed: false },
+      user_story: 1001,
+      user_story_extra_info: { id: 1001, ref: 12, subject: "Login with SSO" },
+      ...overrides,
+    });
+  }
+
+  it("counts every task of the story, not only the ones that moved", async () => {
+    const { fake, activity } = await connect();
+    // Nothing happened to either of these this week.
+    fake.tasks.set(2002, secondTask());
+    fake.tasks.set(
+      2003,
+      secondTask({
+        id: 2003,
+        ref: 36,
+        subject: "Delete the old callback",
+        status: 203,
+        status_extra_info: { name: "Closed", is_closed: true },
+      }),
+    );
+
+    const story = byRef((await activity(LAST_WEEK)).payload(), 12);
+    expect(story).toMatchObject({ tasks_total: 3, tasks_done: 1, all_tasks_done: false });
+  });
+
+  it("says when every task of the story is done", async () => {
+    const { fake, activity } = await connect();
+    const task = fake.tasks.get(2001) as Record<string, unknown>;
+    fake.tasks.set(2001, {
+      ...task,
+      status: 203,
+      status_extra_info: { name: "Closed", is_closed: true },
+    });
+
+    const story = byRef((await activity(LAST_WEEK)).payload(), 12);
+    expect(story).toMatchObject({ tasks_total: 1, tasks_done: 1, all_tasks_done: true });
+  });
+
+  it("counts the tasks of a story that was closed without being touched", async () => {
+    const { fake, activity } = await connect();
+    fake.tasks.set(2002, secondTask({ user_story: 1003, user_story_extra_info: { id: 1003 } }));
+
+    const asked = { ...LAST_WEEK, include_by_finish_date: true };
+    expect(byRef((await activity(asked)).payload(), 14)).toMatchObject({
+      tasks_total: 1,
+      tasks_done: 0,
+      all_tasks_done: false,
+    });
+  });
+
+  it("names the tasks the window never touched when asked for all of them", async () => {
+    const { fake, activity } = await connect();
+    fake.tasks.set(2002, secondTask());
+
+    const payload = (
+      await activity({ ...LAST_WEEK, fold_tasks: true, tasks_scope: "all" })
+    ).payload();
+    const tasks = byRef(payload, 12)?.["tasks"] as Array<Record<string, unknown>>;
+
+    expect(tasks).toHaveLength(2);
+    // The one that moved is there in full; the other one is named and no more.
+    expect(tasks[0]).toMatchObject({
+      ref: 34,
+      events_count: 1,
+      project: "apollo",
+      in_period: true,
+    });
+    expect(tasks[1]).toEqual({
+      type: "task",
+      id: 2002,
+      ref: 35,
+      subject: "Document the callback",
+      status_now: "New",
+      status_is_closed: false,
+      in_period: false,
+    });
+  });
+
+  it("leaves the counters out rather than count half a task list", async () => {
+    const { activity } = await connect(
+      {},
+      { failOnce: { "GET /tasks": { status: 500, body: { _error_message: "boom" } } } },
+    );
+    const payload = (await activity(LAST_WEEK)).payload();
+
+    expect(byRef(payload, 12)).not.toHaveProperty("tasks_total");
+    expect(String(payload.projects[0]?.["degraded"])).toMatch(/tasks: /);
+  });
+});
+
+describe("taiga_activity: closed by status, not by the flag", () => {
+  /** One event on #15, which starts the week in New and is touched by nothing else. */
+  function changed(values: Record<string, unknown>): TimelineEvent {
+    return {
+      id: 9990,
+      created: "2026-10-22T11:00:00.000Z",
+      event_type: "userstories.userstory.change",
+      object_id: 1004,
+      project: 7,
+      data: {
+        user: { id: 1, name: "Alice Example" },
+        userstory: { id: 1004, ref: 15, subject: "Publish the token endpoint" },
+        values_diff: values,
+      },
+    };
+  }
+
+  it("closes a card that reached a closed status, flag or no flag", async () => {
+    const { fake, activity } = await connect();
+    fake.timelines.set(7, [changed({ status: ["New", "Done"] })]);
+
+    const story = byRef((await activity(LAST_WEEK)).payload(), 15);
+    expect(story).toMatchObject({ closed_in_period: true, closed_flag_in_period: false });
+    expect(story?.["status_path"]).toEqual([
+      { name: "New", is_closed: false },
+      { name: "Done", is_closed: true },
+    ]);
+  });
+
+  it("does not call a card closed when only the flag arrived", async () => {
+    const { fake, activity } = await connect();
+    fake.timelines.set(7, [changed({ is_closed: [false, true] })]);
+
+    expect(byRef((await activity(LAST_WEEK)).payload(), 15)).toMatchObject({
+      status_now: "New",
+      status_is_closed: false,
+      closed_in_period: false,
+      closed_flag_in_period: true,
+    });
+  });
+
+  it("does not close a card twice when it was closed already", async () => {
+    const { fake, activity } = await connect();
+    fake.timelines.set(7, [changed({ status: ["Done", "Done"] })]);
+
+    expect(byRef((await activity(LAST_WEEK)).payload(), 15)).toMatchObject({
+      closed_in_period: false,
+    });
+  });
+
+  it("times every status move, so the work can be dated without a finish date", async () => {
+    const { activity } = await connect();
+    const story = byRef((await activity(LAST_WEEK)).payload(), 12);
+
+    expect(story?.["status_events"]).toEqual([
+      {
+        at: "2026-10-20T07:00:00.000Z",
+        from: "New",
+        to: "In Progress",
+        to_is_closed: false,
+      },
+      {
+        at: "2026-10-23T16:40:11.004Z",
+        from: "In Progress",
+        to: "Done",
+        to_is_closed: true,
+      },
+    ]);
+  });
+});
+
+describe("taiga_activity: closing a card is not working on it", () => {
+  it("marks a card the window only closed", async () => {
+    const { fake, activity } = await connect();
+    // The status move, the flag and the finish date of #12 — and nothing else.
+    fake.timelines.set(7, [APOLLO_TIMELINE[2] as TimelineEvent]);
+
+    expect(byRef((await activity(LAST_WEEK)).payload(), 12)).toMatchObject({
+      closure_only: true,
+      event_kinds: ["close_flag", "finish_date", "status"],
+    });
+  });
+
+  it("does not mark a story whose tasks moved", async () => {
+    const { fake, activity } = await connect();
+    fake.timelines.set(7, [APOLLO_TIMELINE[2], APOLLO_TIMELINE[5]] as TimelineEvent[]);
+
+    const payload = (await activity(LAST_WEEK)).payload();
+    expect(byRef(payload, 12)).toMatchObject({ closure_only: false });
+    expect(byRef(payload, 34)).toMatchObject({ type: "task" });
+  });
+});
+
+describe("taiga_activity: a finish date is not an event", () => {
+  it("leaves out a card that nothing but a finish date vouches for", async () => {
+    const { activity } = await connect();
+    const payload = (await activity(LAST_WEEK)).payload();
+
+    expect(byRef(payload, 14)).toBeUndefined();
+    // The date itself still travels with the cards that are in the answer.
+    expect(byRef(payload, 12)?.["finish_date"]).toBe("2026-10-23T16:40:10.112Z");
+
+    const asked = (await activity({ ...LAST_WEEK, include_by_finish_date: true })).payload();
+    expect(byRef(asked, 14)).toMatchObject({ source: "finish_date", closed_in_period: true });
+  });
+});
+
+describe("taiga_activity: one comment, edited", () => {
+  it("does not read an edited comment as a second one", async () => {
+    const { fake, activity } = await connect();
+    const edited: TimelineEvent = {
+      id: 9995,
+      created: "2026-10-22T10:00:00.000Z",
+      event_type: "issues.issue.change",
+      object_id: 4001,
+      project: 7,
+      data: {
+        user: { id: 2, name: "Bob Builder" },
+        issue: { id: 4001, ref: 183, subject: "Login loops on Safari" },
+        // Taiga has no "edited" event: the whole text arrives again.
+        comment: "Reproduced on staging — the callback drops the state parameter.",
+        values_diff: [],
+      },
+    };
+    fake.timelines.set(7, [...APOLLO_TIMELINE.slice(0, 4), edited, ...APOLLO_TIMELINE.slice(4)]);
+
+    const issue = byRef((await activity(LAST_WEEK)).payload(), 183);
+
+    expect(issue).toMatchObject({ events_count: 1 });
+    expect(issue?.["comments"]).toEqual([
+      {
+        at: "2026-10-22T10:00:00.000Z",
+        author: "Bob Builder",
+        text: "Reproduced on staging — the callback drops the state parameter.",
+        edited: true,
+      },
+    ]);
+  });
+});
+
+describe("taiga_activity: a compact answer", () => {
+  it("drops the empty values, the URLs and the derived path", async () => {
+    const { activity } = await connect();
+    const asked = { ...LAST_WEEK, fold_tasks: true };
+    const full = await activity(asked);
+    const compact = await activity({ ...asked, verbosity: "compact" });
+
+    const story = byRef(compact.payload(), 12);
+    expect(story).toMatchObject({ ref: 12, status_now: "Done", closed_in_period: true });
+    // status_events says everything status_path was derived from.
+    expect(story).toHaveProperty("status_events");
+    expect(story).not.toHaveProperty("url");
+    expect(story).not.toHaveProperty("status_path");
+    // closure_only is false here, tasks_done is 0: an absent key says the same thing.
+    expect(Object.values(story ?? {}).every((value) => !isEmpty(value))).toBe(true);
+
+    expect(compact.text).not.toContain("\n");
+    expect(compact.text.length).toBeLessThan(full.text.length / 2);
   });
 });
