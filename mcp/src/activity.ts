@@ -46,6 +46,12 @@ export interface ActivityInput {
   includePlanning: boolean;
   /** When true, a task is nested under its parent story instead of standing alone. */
   foldTasks: boolean;
+  /** `"all"` reports a story's whole task composition, not only the tasks the window touched. */
+  tasksScope: "period" | "all";
+  /** Whether a card may enter the answer on its finish date alone, with no event at all. */
+  includeByFinishDate: boolean;
+  /** `"compact"` drops every empty value, the web URLs and the derived status path. */
+  verbosity: "compact" | "full";
   /** Board positions are dropped unless this is explicitly false (events only). */
   dropNoise: boolean;
 }
@@ -73,11 +79,25 @@ interface ProjectOutcome {
   degraded?: string;
 }
 
+/** One status move, with the time it happened. */
+interface StatusEvent {
+  at: string;
+  from: string | null;
+  to: string | null;
+}
+
+/** A status name as the timeline spells it, against what the project's schema says of it. */
+interface StatusStep {
+  name: string;
+  is_closed: boolean | null;
+}
+
 /** Running state of one item while its events are folded together. */
 interface ItemAccumulator {
   target: EventTarget;
   type: ItemType;
-  statusPath: string[];
+  /** Every status move in order: the path, the dates and the closure all come from these. */
+  statusEvents: StatusEvent[];
   closedByEvent: boolean;
   firstAt: string;
   lastAt: string;
@@ -91,6 +111,10 @@ interface ItemAccumulator {
   comments: Array<Record<string, unknown>>;
   hasWork: boolean;
   hasComment: boolean;
+  /** Which kinds of change the window saw. Feeds `event_kinds` and `closure_only`. */
+  kinds: Set<string>;
+  /** One entry per distinct comment, so an edit does not read as a second comment. */
+  commentKeys: Map<string, Record<string, unknown> | null>;
 }
 
 /** The inventory of a project: every item of the requested kinds, by id. */
@@ -128,6 +152,55 @@ function pushStatus(path: string[], value: string | null | undefined): void {
   if (!value) return;
   if (path[path.length - 1] === value) return;
   path.push(value);
+}
+
+/**
+ * The identity of a comment, for telling an edit from a second comment.
+ *
+ * Taiga has no "edited" event: editing a comment emits another event carrying the whole
+ * text again. Counted as written, one comment edited twice reads as three, and the event
+ * count is what a report weighs a card by.
+ */
+function commentKey(author: string | null, text: string): string {
+  return `${author ?? ""}\u0000${text.replace(/\s+/g, " ").trim().toLowerCase()}`;
+}
+
+/** The kinds of change that are closing a card rather than working on it. */
+const CLOSURE_KINDS = new Set(["status", "close_flag", "finish_date"]);
+
+/** Fields a compact answer leaves out even when they are filled in. */
+const COMPACT_DROPPED = new Set(["url", "status_path", "first_event_at"]);
+
+/** Whether a value says anything at all. A compact answer omits the ones that do not. */
+function isEmptyValue(value: unknown): boolean {
+  if (value === null || value === undefined || value === false || value === 0) return true;
+  if (value === "") return true;
+  return Array.isArray(value) && value.length === 0;
+}
+
+/**
+ * Strip a row down for a compact answer: no empty values, no web URLs, no derived path.
+ *
+ * Three projects of a week come to some 115 KB pretty-printed, which does not fit in a
+ * tool's output and goes to a file instead. Most of that is `false`, `null` and `[]` —
+ * an absent key says the same thing in a tenth of the space, and `status_events` carries
+ * everything `status_path` was derived from.
+ */
+function compactRow(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (COMPACT_DROPPED.has(key) || isEmptyValue(value)) continue;
+    out[key] = Array.isArray(value) ? value.map(compactValue) : compactValue(value);
+  }
+  return out;
+}
+
+function compactValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(compactValue);
+  if (value !== null && typeof value === "object") {
+    return compactRow(value as Record<string, unknown>);
+  }
+  return value;
 }
 
 /**
@@ -209,6 +282,9 @@ export class ActivityService {
           }
         : null;
 
+    const shape = (rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> =>
+      input.verbosity === "compact" ? rows.map(compactRow) : rows;
+
     return {
       window: formatWindow(window),
       projects: outcomes.map((outcome) => ({
@@ -224,8 +300,8 @@ export class ActivityService {
       })),
       truncated,
       ...(filters ? { filters } : {}),
-      ...(input.groupBy === "event" ? { events } : { items }),
-      sprints,
+      ...(input.groupBy === "event" ? { events: shape(events) } : { items: shape(items) }),
+      sprints: shape(sprints),
     };
   }
 
@@ -293,7 +369,13 @@ export class ActivityService {
       this.fold(accumulators, entry, input);
     }
 
-    const inventory = await this.loadInventory(catalog, itemTypes, accumulators, outcome);
+    // "Are all its tasks done" is the question a report answers about a story, so the task
+    // list is loaded even when tasks themselves were not asked for.
+    const inventoryTypes =
+      itemTypes.includes("userstory") && !itemTypes.includes("task")
+        ? [...itemTypes, "task" as ItemType]
+        : itemTypes;
+    const inventory = await this.loadInventory(catalog, inventoryTypes, accumulators, outcome);
     const assembled = this.assemble(catalog, window, input, itemTypes, accumulators, inventory);
 
     if (input.groupBy === "event") {
@@ -303,7 +385,7 @@ export class ActivityService {
       events.push(...this.eventRows(catalog, parsed, input, filtered ? known : null));
     }
 
-    const rows = input.foldTasks ? this.foldTasks(assembled) : assembled;
+    const rows = input.foldTasks ? this.foldTasks(assembled, input) : assembled;
     outcome.items = rows.length;
     items.push(...rows);
 
@@ -403,7 +485,7 @@ export class ActivityService {
       acc = {
         target: { ...target },
         type,
-        statusPath: [],
+        statusEvents: [],
         closedByEvent: false,
         firstAt: entry.at,
         lastAt: entry.at,
@@ -417,6 +499,8 @@ export class ActivityService {
         comments: [],
         hasWork: false,
         hasComment: false,
+        kinds: new Set(),
+        commentKeys: new Map(),
       };
       accumulators.set(key, acc);
     }
@@ -426,7 +510,6 @@ export class ActivityService {
     if (target.subject !== undefined) acc.target.subject = target.subject;
     if (target.parent !== undefined) acc.target.parent = target.parent;
 
-    acc.events += 1;
     acc.lastAt = entry.at;
     acc.attachmentsAdded += entry.attachmentsAdded;
     acc.attachmentsRemoved += entry.attachmentsRemoved;
@@ -434,9 +517,11 @@ export class ActivityService {
     for (const change of entry.changes) {
       if (isWork(change)) acc.hasWork = true;
       if (isClosing(change)) acc.closedByEvent = true;
+      // The flag and the status disagree in both directions, so they are kept apart from
+      // here on: "closed" is the flag, a closed status is what the schema says it is.
+      acc.kinds.add(change.kind === "closed" ? "close_flag" : change.kind);
       if (change.kind === "status") {
-        if (acc.statusPath.length === 0) pushStatus(acc.statusPath, change.from);
-        pushStatus(acc.statusPath, change.to);
+        acc.statusEvents.push({ at: entry.at, from: change.from ?? null, to: change.to ?? null });
       }
       if (change.kind === "description") acc.descriptionChanged = true;
       if (change.kind === "sprint") {
@@ -448,18 +533,37 @@ export class ActivityService {
       }
     }
 
+    let editedComment = false;
     if (entry.comment !== null) {
       acc.hasComment = true;
-      if (input.includeComments) {
+      acc.kinds.add("comment");
+      const key = commentKey(entry.author, entry.comment);
+      if (acc.commentKeys.has(key)) {
+        // Editing a comment emits the whole text again: one comment, written and then
+        // edited, rather than two things said.
+        const first = acc.commentKeys.get(key);
+        if (first) {
+          first["at"] = entry.at;
+          first["edited"] = true;
+        }
+        editedComment = true;
+      } else if (input.includeComments) {
         const { text, truncated } = truncateText(entry.comment, input.commentChars);
-        acc.comments.push({
+        const row: Record<string, unknown> = {
           at: entry.at,
           author: entry.author,
           text,
           ...(truncated ? { truncated: true } : {}),
-        });
+        };
+        acc.comments.push(row);
+        acc.commentKeys.set(key, row);
+      } else {
+        acc.commentKeys.set(key, null);
       }
     }
+
+    // An edit is not a second event: the count is what a report weighs a card by.
+    if (!editedComment || entry.changes.length > 0) acc.events += 1;
   }
 
   /**
@@ -556,32 +660,157 @@ export class ActivityService {
     const rows: Array<Record<string, unknown>> = [];
     const covered = new Set<string>();
 
+    // A story whose tasks moved was worked on, however little happened to the story
+    // itself. `closure_only` has to know the difference.
+    const tasksTouched = new Set<number>();
+    for (const acc of accumulators.values()) {
+      if (acc.type !== "task") continue;
+      const raw = inventory.byType.get("task")?.get(acc.target.id);
+      const parent = acc.target.parent?.id ?? raw?.user_story ?? null;
+      if (typeof parent === "number") tasksTouched.add(parent);
+    }
+
     for (const [key, acc] of accumulators) {
       covered.add(key);
       const raw = inventory.byType.get(acc.type)?.get(acc.target.id) ?? null;
-      const row = this.itemRow(catalog, window, input, acc, raw);
+      const row = this.itemRow(catalog, window, input, acc, raw, { tasksTouched });
       if (row) rows.push(row);
     }
 
     // Rule: a card whose finish date falls inside the window and which is closed now was
     // worked on in the window, even when its only event — the status move — came later.
-    for (const type of itemTypes) {
-      if (!inventory.complete.has(type)) continue;
-      for (const raw of inventory.byType.get(type)?.values() ?? []) {
-        const key = `${type}:${raw.id}`;
-        if (covered.has(key)) continue;
-        if (!this.finishedInWindow(type, raw, catalog, window)) continue;
-        // Nobody authored this row, so a filter on authors cannot vouch for it.
-        if (input.users?.length) continue;
-        const row = this.itemRow(catalog, window, input, null, raw, type);
-        if (row) rows.push(row);
+    // Nothing in Taiga obliges anyone to fill that date in, though, so a card with no
+    // event in the window at all enters the answer only when the caller asks for it.
+    if (input.includeByFinishDate) {
+      for (const type of itemTypes) {
+        if (!inventory.complete.has(type)) continue;
+        for (const raw of inventory.byType.get(type)?.values() ?? []) {
+          const key = `${type}:${raw.id}`;
+          if (covered.has(key)) continue;
+          if (!this.finishedInWindow(type, raw, catalog, window)) continue;
+          // Nobody authored this row, so a filter on authors cannot vouch for it.
+          if (input.users?.length) continue;
+          const row = this.itemRow(catalog, window, input, null, raw, {
+            tasksTouched,
+            fallbackType: type,
+          });
+          if (row) rows.push(row);
+        }
       }
     }
 
     // Planning is more than half of a busy week, and a report that lists it has to read
     // past it. Dropping it here keeps the per-project counters honest about what is in
     // the answer.
-    return input.includePlanning ? rows : rows.filter((row) => row["planning_only"] !== true);
+    const kept = input.includePlanning
+      ? rows
+      : rows.filter((row) => row["planning_only"] !== true);
+    // With planning gone the flag is false on every row that is left.
+    if (!input.includePlanning) {
+      for (const row of kept) delete row["planning_only"];
+    }
+
+    this.rollUpTasks(catalog, input, kept, accumulators, inventory);
+    return kept;
+  }
+
+  /**
+   * Answer "are all its tasks done" on every story in the report.
+   *
+   * That is the criterion a weekly report actually applies to a story: the dates are not
+   * filled in reliably and the closed flag disagrees with the status in both directions,
+   * but the task list is a fact. The counters cover the story's whole composition, not
+   * only the tasks the window touched, so they cannot come from the timeline — they come
+   * from the one task list already read for this project.
+   */
+  private rollUpTasks(
+    catalog: ProjectCatalog,
+    input: ActivityInput,
+    rows: Array<Record<string, unknown>>,
+    accumulators: Map<string, ItemAccumulator>,
+    inventory: Inventory,
+  ): void {
+    const tasks = inventory.byType.get("task");
+    // A partial list would report "3 of 4 done" about a story that has nine tasks.
+    if (!tasks || !inventory.complete.has("task")) return;
+
+    const byStory = new Map<number, RawItem[]>();
+    for (const raw of tasks.values()) {
+      const storyId =
+        typeof raw.user_story === "number" ? raw.user_story : raw.user_story_extra_info?.id;
+      if (typeof storyId !== "number") continue;
+      const list = byStory.get(storyId) ?? [];
+      list.push(raw);
+      byStory.set(storyId, list);
+    }
+
+    for (const row of rows) {
+      if (row["type"] !== "userstory") continue;
+      const list = byStory.get(row["id"] as number) ?? [];
+      const done = list.filter((raw) => this.isClosedNow("task", raw, catalog));
+      row["tasks_total"] = list.length;
+      row["tasks_done"] = done.length;
+      row["all_tasks_done"] = list.length > 0 && done.length === list.length;
+      if (input.tasksScope !== "all") continue;
+
+      // The tasks the window did not touch, named rather than only counted. A task that
+      // is about to be nested under this story is left out: its own row says more.
+      const brief: Array<Record<string, unknown>> = [];
+      for (const raw of list) {
+        const inPeriod = accumulators.has(`task:${raw.id}`);
+        if (inPeriod && input.foldTasks) continue;
+        brief.push({
+          type: "task",
+          id: raw.id,
+          ref: raw.ref ?? null,
+          subject: raw.subject ?? null,
+          status_now: this.statusNameOf(catalog, "task", raw),
+          status_is_closed: this.isClosedNow("task", raw, catalog),
+          in_period: inPeriod,
+        });
+      }
+      if (brief.length === 0) continue;
+      const nested = (row["tasks"] as Array<Record<string, unknown>> | undefined) ?? [];
+      row["tasks"] = [...nested, ...brief];
+    }
+  }
+
+  /** What the project's schema says about a status name. `null` when it has no such status. */
+  private statusIsClosed(
+    catalog: ProjectCatalog,
+    type: ItemType,
+    name: string | null | undefined,
+  ): boolean | null {
+    if (!name) return null;
+    const needle = name.trim().toLowerCase();
+    const status = catalog.statuses[type].find(
+      (candidate) => candidate.name.trim().toLowerCase() === needle,
+    );
+    return status?.is_closed ?? null;
+  }
+
+  /** The status an item sits in now, by name. */
+  private statusNameOf(catalog: ProjectCatalog, type: ItemType, raw: RawItem): string | null {
+    const direct = raw.status_extra_info?.name;
+    if (typeof direct === "string" && direct.trim() !== "") return direct;
+    return catalog.statuses[type].find((candidate) => candidate.id === raw.status)?.name ?? null;
+  }
+
+  /** The path the card took, each step read against the project's schema. */
+  private statusPathOf(
+    catalog: ProjectCatalog,
+    type: ItemType,
+    acc: ItemAccumulator,
+  ): StatusStep[] {
+    const names: string[] = [];
+    for (const step of acc.statusEvents) {
+      if (names.length === 0) pushStatus(names, step.from);
+      pushStatus(names, step.to);
+    }
+    return names.map((name) => ({
+      name,
+      is_closed: this.statusIsClosed(catalog, type, name),
+    }));
   }
 
   /**
@@ -591,7 +820,10 @@ export class ActivityService {
    * it. A task whose story saw no activity in the window — or was dropped by a filter —
    * has nothing to nest under and stays where it is.
    */
-  private foldTasks(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  private foldTasks(
+    rows: Array<Record<string, unknown>>,
+    input: ActivityInput,
+  ): Array<Record<string, unknown>> {
     const stories = new Map<number, Record<string, unknown>>();
     for (const row of rows) {
       if (row["type"] === "userstory") stories.set(row["id"] as number, row);
@@ -608,9 +840,11 @@ export class ActivityService {
         continue;
       }
       const nested = { ...row };
-      // Both are implied by where the task now sits.
-      delete nested["project"];
+      // The parent story is implied by where the task now sits. The project is not:
+      // without it, whoever sorts the answer by project loses every nested task.
       delete nested["parent"];
+      // Only worth saying where the list also holds tasks the window never touched.
+      if (input.tasksScope === "all") nested["in_period"] = true;
       const list = (story["tasks"] as Array<Record<string, unknown>> | undefined) ?? [];
       list.push(nested);
       story["tasks"] = list;
@@ -619,7 +853,8 @@ export class ActivityService {
     for (const story of stories.values()) {
       const list = story["tasks"] as Array<Record<string, unknown>> | undefined;
       if (!list) continue;
-      const at = (row: Record<string, unknown>): string => String(row["last_event_at"]);
+      // A task named only by `tasks_scope: "all"` has no events, so it sorts last.
+      const at = (row: Record<string, unknown>): string => String(row["last_event_at"] ?? "");
       list.sort((a, b) => at(b).localeCompare(at(a)));
     }
     return kept;
@@ -653,9 +888,9 @@ export class ActivityService {
     input: ActivityInput,
     acc: ItemAccumulator | null,
     raw: RawItem | null,
-    fallbackType?: ItemType,
+    options: { tasksTouched: Set<number>; fallbackType?: ItemType },
   ): Record<string, unknown> | null {
-    const type = acc?.type ?? fallbackType;
+    const type = acc?.type ?? options.fallbackType;
     const id = acc?.target.id ?? raw?.id;
     if (type === undefined || id === undefined) return null;
 
@@ -675,14 +910,36 @@ export class ActivityService {
 
     const finishDate = dateOrNull(raw?.finish_date) ?? dateOrNull(raw?.finished_date);
     const closedByFinishDate = raw ? this.finishedInWindow(type, raw, catalog, window) : false;
-    const closedByEvent = acc?.closedByEvent === true;
-    const closedInPeriod = closedByEvent || closedByFinishDate;
+
+    // A card is closed when it reaches a status the project calls closed. The `is_closed`
+    // flag is reported beside that, never instead of it: a card can reach Done without the
+    // flag moving, and the flag can arrive on a card still sitting in New. Where the two
+    // disagree, both are in the answer and the reader can see it.
+    const statusPath = acc ? this.statusPathOf(catalog, type, acc) : [];
+    const closedByStatus =
+      acc?.statusEvents.some(
+        (step) =>
+          this.statusIsClosed(catalog, type, step.to) === true &&
+          this.statusIsClosed(catalog, type, step.from) !== true,
+      ) === true;
+    const closedFlagInPeriod = acc?.closedByEvent === true;
+    const closedInPeriod = closedByStatus || closedByFinishDate;
 
     const source = acc
       ? closedByFinishDate
         ? "both"
         : "timeline"
       : "finish_date";
+
+    // Eight cards closed between 09:56 and 12:34 on a Monday are a board being tidied, not
+    // a day's work: the report has to be able to tell them from the rest.
+    const eventKinds = acc ? [...acc.kinds].sort() : [];
+    const closureOnly =
+      acc !== null &&
+      (closedInPeriod || closedFlagInPeriod) &&
+      !acc.hasComment &&
+      eventKinds.every((kind) => CLOSURE_KINDS.has(kind)) &&
+      !(type === "userstory" && options.tasksTouched.has(id));
 
     const row: Record<string, unknown> = {
       project: catalog.slug,
@@ -693,11 +950,22 @@ export class ActivityService {
       url: itemUrl(this.session.webUrl, catalog.slug, type, ref) ?? null,
       ...(acc?.target.parent ? { parent: acc.target.parent } : {}),
       status_now: projection?.["status"] ?? null,
+      status_is_closed: raw ? this.isClosedNow(type, raw, catalog) : null,
       tags,
       sprint: projection?.["sprint"] ?? null,
       assignees: this.assigneesOf(raw, catalog),
-      status_path: acc?.statusPath ?? [],
+      status_path: statusPath,
+      status_events:
+        acc?.statusEvents.map((step) => ({
+          at: step.at,
+          from: step.from,
+          to: step.to,
+          to_is_closed: this.statusIsClosed(catalog, type, step.to),
+        })) ?? [],
+      event_kinds: eventKinds,
       closed_in_period: closedInPeriod,
+      closed_flag_in_period: closedFlagInPeriod,
+      closure_only: closureOnly,
       finish_date: finishDate,
       source,
       planning_only: acc ? !(acc.hasWork || acc.hasComment || closedInPeriod) : false,

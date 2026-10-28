@@ -241,9 +241,22 @@ taiga_activity {
       "type": "userstory", "id": 1001, "ref": 12,
       "subject": "Login with SSO",
       "url": "https://tree.taiga.io/project/apollo/us/12",
-      "status_now": "Done", "tags": ["ui", "auth"], "sprint": "Sprint 2", "assignees": ["bob"],
-      "status_path": ["New", "In Progress", "Done"],
+      "status_now": "Done", "status_is_closed": true,
+      "tags": ["ui", "auth"], "sprint": "Sprint 2", "assignees": ["bob"],
+      "status_path": [
+        { "name": "New", "is_closed": false },
+        { "name": "In Progress", "is_closed": false },
+        { "name": "Done", "is_closed": true }
+      ],
+      "status_events": [
+        { "at": "2026-10-20T07:00:00.000Z", "from": "New", "to": "In Progress", "to_is_closed": false },
+        { "at": "2026-10-23T16:40:11.004Z", "from": "In Progress", "to": "Done", "to_is_closed": true }
+      ],
+      "event_kinds": ["attachment", "close_flag", "comment", "description", "status"],
       "closed_in_period": true,
+      "closed_flag_in_period": true,
+      "closure_only": false,
+      "tasks_total": 3, "tasks_done": 3, "all_tasks_done": true,
       "finish_date": "2026-10-23T16:40:10.112Z",
       "source": "both",
       "planning_only": false,
@@ -270,6 +283,13 @@ A task also carries `parent`, the user story above it — or sits nested under t
 `include_planning: false` too: on a busy week more than half the cards were only planned, and
 dropping them roughly halves the answer.
 
+Whether a story is **finished** is answered by `tasks_total`, `tasks_done` and
+`all_tasks_done`, which cover its whole task composition rather than the part of it the window
+touched; `tasks_scope: "all"` names the untouched tasks as well. Whether it was **closed** is
+answered by its statuses — `status_events` times every move, `closure_only` marks a card the
+window did nothing to but close — because `finish_date` and the `is_closed` flag are filled in
+by hand and often not at all.
+
 With `group_by: "event"` the answer holds `events` instead of `items`: the bare chronology,
 oldest first, one entry per change. Each carries the `kind` of change (`created`, `status`,
 `closed`, `finish_date`, `comment`, `sprint`, `assignee`, `attachment`, `description`,
@@ -287,6 +307,9 @@ unnamed "something changed".
 | `include_comments` | `true` | Include comment text |
 | `include_planning` | `true` | `false` drops the cards that were only planned — the cheapest way to cut the answer down to work done |
 | `fold_tasks` | `false` | Nest each task under its parent story. A task whose story is not in the answer stays on its own |
+| `tasks_scope` | `period` | `all` lists a story's whole task composition: every nested task then carries `in_period`, and the untouched ones are a short entry. The three counters are there either way |
+| `include_by_finish_date` | `false` | `true` also pulls in cards with no event in the window whose `finish_date` falls inside it |
+| `verbosity` | `full` | `compact` drops every empty value, the URLs and `status_path`, and serialises without indentation |
 | `tags` | — | Only cards carrying **all** of these tags |
 | `users` | — | Only events by these people (`"me"` is the authenticated user) |
 | `max_pages` | `20` | Safety stop, counted in pages of 100 events **that reach into the window** — paging past newer events to get there does not count against it |
@@ -300,11 +323,28 @@ unnamed "something changed".
   work done on a Saturday is still work done that week. Both the local bounds and their UTC
   equivalents come back in `window`: three hours of offset is exactly enough to push a Monday
   morning out of the week it belongs to.
-- **A closure entered after the fact still counts.** Teams move cards to Done days later, so
-  `closed_in_period` is true either when the window holds the `is_closed` change, or when the
-  card's `finish_date` falls inside it and the card is closed now. `source` says which:
-  `"timeline"`, `"finish_date"` or `"both"`. A card whose only evidence is its finish date has
-  no events in the window and is still reported.
+- **A card is closed when its status says so.** `closed_in_period` is decided against the
+  project's own schema: the card reached a status that project calls closed. The `is_closed`
+  flag is reported beside it as `closed_flag_in_period`, never instead of it — a card can
+  reach Done without the flag ever moving, and the flag can arrive on a card still sitting in
+  New. Where the two disagree, both are in the answer and the reader can see it. `status_events`
+  carries the time of every move, so the work can be dated without trusting a finish date.
+- **A story is as done as its tasks.** `tasks_total`, `tasks_done` and `all_tasks_done` cover
+  the story's whole task composition, not only the tasks the window touched. That is the
+  criterion a weekly report actually applies to a story, and the one thing the timeline cannot
+  answer on its own; it costs nothing, because the task list is read for the project anyway.
+- **Closing a card is not working on it.** `closure_only` marks a card whose window holds
+  nothing but the closure: no comment, no attachment, no events on its tasks. Eight cards
+  closed between 09:56 and 12:34 on a Monday are a board being tidied, and they would otherwise
+  read as that Monday's work.
+- **A finish date is not an event.** A closure entered after the fact still counts — teams move
+  cards to Done days later — but nothing in Taiga obliges anyone to fill `finish_date` in, so a
+  card with **no** event in the window enters the answer only with
+  `include_by_finish_date: true`. `source` says what the evidence was: `"timeline"`,
+  `"finish_date"` or `"both"`, and the date itself travels with every card either way.
+- **One comment, edited, is one comment.** Taiga has no "edited" event: it re-emits the whole
+  text. The answer keeps a single entry, with the later `at` and `edited: true`, and does not
+  count the edit as another event — the event count is what a report weighs a card by.
 - **Planning is not work.** `planning_only` marks a card that was only moved between sprints,
   reassigned, reordered or had its description edited — no status change, no closure, no
   comment, no attachment. Left to the reader, that call gets made differently every week.
@@ -324,6 +364,11 @@ unnamed "something changed".
   returns what the earlier ones gave, marked `truncated`, rather than failing the call.
 - **A project you cannot read does not sink the call.** A `403` is reported against that project
   and the others still answer; an unknown slug fails the call and lists the projects you have.
+- **An answer that fits.** Three projects of a pretty-printed week do not fit in one tool
+  answer, and most of that text is `false`, `null` and `[]`. `verbosity: "compact"` leaves out
+  every empty value, the web URLs and `status_path` — `status_events` says the same — and drops
+  the indentation. That cuts the answer to between a third and a half its size, depending on how
+  much comment text it carries, and loses nothing a report would have printed.
 
 ## Field support per item kind
 
@@ -351,7 +396,7 @@ Two Taiga rules the server enforces for you instead of letting the field be drop
 ## Development
 
 ```bash
-bun run test        # 128 tests against an in-memory Taiga (no network)
+bun run test        # 142 tests against an in-memory Taiga (no network)
 bun run typecheck
 bun run build
 ```

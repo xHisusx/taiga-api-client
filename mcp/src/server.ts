@@ -9,7 +9,7 @@ import { registerDeleteTool, registerWriteTools } from "./tools/write.js";
 import type { ToolContext } from "./tools/schemas.js";
 
 /** Version advertised to MCP clients. Kept in step with `package.json`. */
-export const SERVER_VERSION = "0.3.0";
+export const SERVER_VERSION = "0.4.0";
 
 const INSTRUCTIONS = `Taiga project management, acting as the authenticated Taiga user. Every call is
 subject to that user's own permissions — a 403 means the account may not do it, not that the
@@ -28,7 +28,10 @@ How to use these tools well:
 - taiga_my_work answers "what is assigned to me"; taiga_search finds an item from a few words.
 - taiga_activity answers "what happened between these dates". Taiga's list endpoints have no
   date filters, so it is the only way to get a period of work — do not try to rebuild one from
-  modified_date and per-item history.
+  modified_date and per-item history. Judge a story by its tasks (tasks_done of tasks_total) and
+  by its statuses, not by finish_date or the is_closed flag: nothing makes anyone fill those in.
+  For a report pass include_planning: false and fold_tasks: true, and verbosity: "compact" when
+  several projects have to fit in one answer.
 - taiga_update_item changes status, assignee, sprint, tags, estimates and can post a comment in
   the same call. It sends the item's version, so a concurrent edit fails loudly instead of being
   overwritten.

@@ -283,7 +283,12 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
         'like "what did we do between the 19th and the 23rd". This is the only way to get a ' +
         "period of work: Taiga's list endpoints have no date filters, and modified_date does " +
         "not tell work apart from a card being moved. For a report, ask for " +
-        "include_planning: false and fold_tasks: true — that is work done, one line per story.",
+        "include_planning: false and fold_tasks: true — that is work done, one line per " +
+        "story, with tasks_total / tasks_done / all_tasks_done saying whether the story is " +
+        "finished. Judge a card by its statuses and its tasks rather than by dates: " +
+        "finish_date and the is_closed flag are filled in by hand and often not at all, " +
+        "which is why status_events carries the time of every status move and " +
+        "closed_flag_in_period is reported apart from closed_in_period.",
       inputSchema: {
         projects: z
           .union([projectSchema, z.array(projectSchema)])
@@ -342,6 +347,33 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
               "which is how a weekly report is written: one line per story, the tasks as the " +
               "evidence under it. A task whose story saw no activity stays on its own.",
           ),
+        tasks_scope: z
+          .enum(["period", "all"])
+          .optional()
+          .describe(
+            'Default "period": a story lists the tasks that moved inside the window. ' +
+              '"all" lists its whole task composition — every nested task then carries ' +
+              "in_period, and the untouched ones are a short entry. The three counters " +
+              "are there either way.",
+          ),
+        include_by_finish_date: z
+          .boolean()
+          .optional()
+          .describe(
+            "Default false. A card with no event in the window at all can still be pulled " +
+              "in by a finish_date inside it; nothing in Taiga obliges anyone to fill that " +
+              "date in, so pass true only when you want those cards. A card that did have " +
+              "events keeps its finish_date in the answer either way.",
+          ),
+        verbosity: z
+          .enum(["compact", "full"])
+          .optional()
+          .describe(
+            'Default "full". "compact" leaves out every empty value, the web URLs and ' +
+              "status_path (status_events says the same), and serialises without " +
+              "indentation, which cuts the answer to between a third and a half its size " +
+              "— for a multi-project week that would not otherwise fit in one answer.",
+          ),
         tags: z
           .array(z.string())
           .optional()
@@ -380,7 +412,7 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
       annotations: READ_ONLY,
     },
     async (args) =>
-      guard(() => {
+      guard(async () => {
         const groupBy = args.group_by ?? "item";
         if (args.drop_noise === false && groupBy !== "event") {
           throw new ResolutionError(
@@ -389,7 +421,8 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
           );
         }
 
-        return context.activity.activity({
+        const verbosity = args.verbosity === "compact" ? "compact" : "full";
+        const payload = await context.activity.activity({
           projects: projectList(context, args.projects),
           includePlanning: args.include_planning !== false,
           foldTasks: args.fold_tasks === true,
@@ -405,7 +438,14 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
           maxPages: args.max_pages ?? 20,
           commentChars: args.comment_chars ?? 1500,
           dropNoise: args.drop_noise !== false,
+          tasksScope: args.tasks_scope === "all" ? "all" : "period",
+          includeByFinishDate: args.include_by_finish_date === true,
+          verbosity,
         });
+
+        // The indentation of a pretty-printed week is a third of its bytes, and a caller
+        // asking for a compact answer is asking because the full one does not fit.
+        return verbosity === "compact" ? JSON.stringify(payload) : payload;
       }),
   );
 }
