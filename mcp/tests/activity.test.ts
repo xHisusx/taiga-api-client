@@ -1051,6 +1051,7 @@ describe("taiga_activity: the task composition of a story", () => {
       in_period: true,
     });
     expect(tasks[1]).toEqual({
+      project: "apollo",
       type: "task",
       id: 2002,
       ref: 35,
@@ -1226,10 +1227,197 @@ describe("taiga_activity: a compact answer", () => {
     expect(story).toHaveProperty("status_events");
     expect(story).not.toHaveProperty("url");
     expect(story).not.toHaveProperty("status_path");
-    // closure_only is false here, tasks_done is 0: an absent key says the same thing.
-    expect(Object.values(story ?? {}).every((value) => !isEmpty(value))).toBe(true);
+    // closure_only is false here: an absent key says that.
+    expect(story).not.toHaveProperty("closure_only");
+    // These are read as answers, so "no" is worth the bytes — and `in_period` on a task
+    // is the only thing that tells a task the window touched from one it did not.
+    const empty = Object.keys(story ?? {}).filter((key) => isEmpty(story?.[key]));
+    expect(empty.sort()).toEqual([
+      "all_tasks_done",
+      "all_tasks_done_at_until",
+      "reopened_in_period",
+      "tasks_done",
+      "tasks_done_at_until",
+    ]);
 
     expect(compact.text).not.toContain("\n");
     expect(compact.text.length).toBeLessThan(full.text.length / 2);
+  });
+});
+describe("taiga_activity: where the window left a card", () => {
+  const ALICE = { id: 1, name: "Alice Example" };
+
+  /** A status move after `until`: the walk pages past these to reach the window. */
+  function afterWindow(id: number, taskId: number, from: string, to: string): TimelineEvent {
+    return {
+      id,
+      created: "2026-10-27T09:00:00.000Z",
+      event_type: "tasks.task.change",
+      object_id: taskId,
+      project: 7,
+      data: {
+        user: ALICE,
+        task: {
+          id: taskId,
+          ref: taskId === 2001 ? 34 : 35,
+          subject: "Wire up the OIDC callback",
+          userstory: { id: 1001, ref: 12, subject: "Login with SSO" },
+        },
+        values_diff: { status: [from, to] },
+      },
+    };
+  }
+
+  function closeTask(fake: FakeTaiga, id: number): void {
+    const task = fake.tasks.get(id) as Record<string, unknown>;
+    fake.tasks.set(id, {
+      ...task,
+      status: 203,
+      status_extra_info: { name: "Closed", is_closed: true },
+    });
+  }
+
+  it("reports the status the window ended on, not today's", async () => {
+    const { fake, activity } = await connect();
+    // #34 reached In progress on the Thursday and was closed on the Tuesday after.
+    fake.timelines.set(7, [afterWindow(9980, 2001, "In progress", "Closed"), ...APOLLO_TIMELINE]);
+    closeTask(fake, 2001);
+
+    const payload = (await activity(LAST_WEEK)).payload();
+    expect(byRef(payload, 34)).toMatchObject({
+      status_now: "Closed",
+      status_is_closed: true,
+      status_at_until: "In progress",
+      status_at_until_is_closed: false,
+    });
+    // So the story is finished today, and was not finished in the week being reported on.
+    expect(byRef(payload, 12)).toMatchObject({
+      tasks_total: 1,
+      tasks_done: 1,
+      all_tasks_done: true,
+      tasks_done_at_until: 0,
+      all_tasks_done_at_until: false,
+    });
+  });
+
+  it("falls back to today's status when nothing moved at all", async () => {
+    const { activity } = await connect();
+    // #13 was moved between sprints and reordered: no status move, in the window or after.
+    expect(byRef((await activity(LAST_WEEK)).payload(), 13)).toMatchObject({
+      status_now: "In progress",
+      status_at_until: "In progress",
+      status_at_until_is_closed: false,
+    });
+  });
+
+  it("names the end-of-window status of a task that moved only after it", async () => {
+    const { fake, activity } = await connect();
+    fake.tasks.set(
+      2002,
+      item({
+        id: 2002,
+        ref: 35,
+        subject: "Document the callback",
+        status: 201,
+        status_extra_info: { name: "New", is_closed: false },
+        user_story: 1001,
+        user_story_extra_info: { id: 1001, ref: 12, subject: "Login with SSO" },
+      }),
+    );
+    fake.timelines.set(7, [afterWindow(9981, 2002, "New", "Closed"), ...APOLLO_TIMELINE]);
+    closeTask(fake, 2002);
+
+    const asked = { ...LAST_WEEK, fold_tasks: true, tasks_scope: "all" };
+    const story = byRef((await activity(asked)).payload(), 12);
+    const tasks = story?.["tasks"] as Array<Record<string, unknown>>;
+
+    expect(story).toMatchObject({ tasks_total: 2, tasks_done: 1, tasks_done_at_until: 0 });
+    expect(tasks[1]).toEqual({
+      project: "apollo",
+      type: "task",
+      id: 2002,
+      ref: 35,
+      subject: "Document the callback",
+      status_now: "Closed",
+      status_is_closed: true,
+      status_at_until: "New",
+      status_at_until_is_closed: false,
+      in_period: false,
+    });
+  });
+});
+
+describe("taiga_activity: closed, and open again eight minutes later", () => {
+  /** One status move on #15, which the inventory leaves sitting in New. */
+  function move(id: number, at: string, from: string, to: string): TimelineEvent {
+    return {
+      id,
+      created: at,
+      event_type: "userstories.userstory.change",
+      object_id: 1004,
+      project: 7,
+      data: {
+        user: { id: 1, name: "Alice Example" },
+        userstory: { id: 1004, ref: 15, subject: "Publish the token endpoint" },
+        values_diff: { status: [from, to] },
+      },
+    };
+  }
+
+  it("says a closure was undone before the window ended", async () => {
+    const { fake, activity } = await connect();
+    fake.timelines.set(7, [
+      move(9983, "2026-10-22T15:14:00.000Z", "Done", "In progress"),
+      move(9982, "2026-10-22T15:06:00.000Z", "New", "Done"),
+    ]);
+
+    // The closure did happen — and four defects closed for eight minutes are not four
+    // defects closed.
+    expect(byRef((await activity(LAST_WEEK)).payload(), 15)).toMatchObject({
+      closed_in_period: true,
+      reopened_in_period: true,
+      status_at_until: "In progress",
+      status_at_until_is_closed: false,
+    });
+  });
+
+  it("does not call a card reopened when the closure stuck", async () => {
+    const { fake, activity } = await connect();
+    fake.timelines.set(7, [move(9984, "2026-10-22T15:06:00.000Z", "New", "Done")]);
+
+    expect(byRef((await activity(LAST_WEEK)).payload(), 15)).toMatchObject({
+      closed_in_period: true,
+      reopened_in_period: false,
+      status_at_until: "Done",
+      status_at_until_is_closed: true,
+    });
+  });
+});
+
+describe("taiga_activity: a board being tidied is not a week's work", () => {
+  it("counts the tasks that moved and the events that were work", async () => {
+    const { activity } = await connect();
+    const payload = (await activity(LAST_WEEK)).payload();
+
+    // Of #12's five events: a comment, an attachment, a description edit and the move to
+    // In Progress. The closing move, the flag, the date and the reassignment are not work.
+    expect(byRef(payload, 12)).toMatchObject({
+      events_count: 5,
+      work_events_count: 4,
+      tasks_touched_in_period: 1,
+    });
+    expect(byRef(payload, 183)).toMatchObject({ work_events_count: 1 });
+  });
+
+  it("counts nothing where the window only closed a card", async () => {
+    const { fake, activity } = await connect();
+    // The status move, the flag and the finish date of #12 — and nothing else.
+    fake.timelines.set(7, [APOLLO_TIMELINE[2] as TimelineEvent]);
+
+    expect(byRef((await activity(LAST_WEEK)).payload(), 12)).toMatchObject({
+      closure_only: true,
+      work_events_count: 0,
+      tasks_touched_in_period: 0,
+    });
   });
 });

@@ -288,7 +288,11 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
         "finished. Judge a card by its statuses and its tasks rather than by dates: " +
         "finish_date and the is_closed flag are filled in by hand and often not at all, " +
         "which is why status_events carries the time of every status move and " +
-        "closed_flag_in_period is reported apart from closed_in_period.",
+        "closed_flag_in_period is reported apart from closed_in_period. A report is about " +
+        "the window and not about today, so read status_at_until, tasks_done_at_until and " +
+        "all_tasks_done_at_until — a task moved to Done three days after the window is not " +
+        "that window's work. closure_only, tasks_touched_in_period and work_events_count " +
+        "tell a week's work from a board being tidied.",
       inputSchema: {
         projects: z
           .union([projectSchema, z.array(projectSchema)])
@@ -372,7 +376,9 @@ export function registerReadTools(server: McpServer, context: ToolContext): void
             'Default "full". "compact" leaves out every empty value, the web URLs and ' +
               "status_path (status_events says the same), and serialises without " +
               "indentation, which cuts the answer to between a third and a half its size " +
-              "— for a multi-project week that would not otherwise fit in one answer.",
+              "— for a multi-project week that would not otherwise fit in one answer. The " +
+              "flags that are read as answers (in_period, closed_in_period, all_tasks_done, " +
+              "the task counters) stay even when they say no.",
           ),
         tags: z
           .array(z.string())

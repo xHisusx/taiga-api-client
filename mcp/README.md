@@ -242,6 +242,7 @@ taiga_activity {
       "subject": "Login with SSO",
       "url": "https://tree.taiga.io/project/apollo/us/12",
       "status_now": "Done", "status_is_closed": true,
+      "status_at_until": "Done", "status_at_until_is_closed": true,
       "tags": ["ui", "auth"], "sprint": "Sprint 2", "assignees": ["bob"],
       "status_path": [
         { "name": "New", "is_closed": false },
@@ -255,14 +256,17 @@ taiga_activity {
       "event_kinds": ["attachment", "close_flag", "comment", "description", "status"],
       "closed_in_period": true,
       "closed_flag_in_period": true,
+      "reopened_in_period": false,
       "closure_only": false,
       "tasks_total": 3, "tasks_done": 3, "all_tasks_done": true,
+      "tasks_done_at_until": 2, "all_tasks_done_at_until": false,
+      "tasks_touched_in_period": 1,
       "finish_date": "2026-10-23T16:40:10.112Z",
       "source": "both",
       "planning_only": false,
       "first_event_at": "2026-10-19T12:00:00.000Z",
       "last_event_at": "2026-10-23T16:40:11.004Z",
-      "events_count": 5,
+      "events_count": 5, "work_events_count": 4,
       "description_changed": true,
       "attachments_added": 1, "attachments_removed": 1,
       "reassigned": [["Alice Example", "Bob Builder"]],
@@ -289,6 +293,11 @@ touched; `tasks_scope: "all"` names the untouched tasks as well. Whether it was 
 answered by its statuses — `status_events` times every move, `closure_only` marks a card the
 window did nothing to but close — because `finish_date` and the `is_closed` flag are filled in
 by hand and often not at all.
+
+Both answers come twice over. `status_now`, `tasks_done` and `all_tasks_done` are about today;
+`status_at_until`, `tasks_done_at_until` and `all_tasks_done_at_until` are about the moment the
+window closed. A report is written about the window, so it reads the second set: a task moved to
+Done on the Wednesday after is not last week's work, however done it looks now.
 
 With `group_by: "event"` the answer holds `events` instead of `items`: the bare chronology,
 oldest first, one entry per change. Each carries the `kind` of change (`created`, `status`,
@@ -329,6 +338,17 @@ unnamed "something changed".
   reach Done without the flag ever moving, and the flag can arrive on a card still sitting in
   New. Where the two disagree, both are in the answer and the reader can see it. `status_events`
   carries the time of every move, so the work can be dated without trusting a finish date.
+- **Where the window left the card, not only where it stands today.** `status_now` answers for
+  today and a report answers for the week, so `status_at_until` carries the status the card sat
+  in when the window closed — read off the first move that came after it — with
+  `status_at_until_is_closed` beside it. A story's tasks get the same treatment:
+  `tasks_done_at_until` and `all_tasks_done_at_until` next to `tasks_done` and
+  `all_tasks_done`. A task that reached Testing on the Thursday and Done on the Wednesday after
+  otherwise reads as finished work of a week in which it was not finished.
+- **A closure undone is not a closure.** Four defects moved to Closed at 15:06 and back out at
+  15:14 come back as `closed_in_period: true` **and** `reopened_in_period: true`: the closure
+  did happen, and four closed defects is still the wrong thing to report. Where the eight
+  minutes left them is in `status_at_until`.
 - **A story is as done as its tasks.** `tasks_total`, `tasks_done` and `all_tasks_done` cover
   the story's whole task composition, not only the tasks the window touched. That is the
   criterion a weekly report actually applies to a story, and the one thing the timeline cannot
@@ -336,7 +356,11 @@ unnamed "something changed".
 - **Closing a card is not working on it.** `closure_only` marks a card whose window holds
   nothing but the closure: no comment, no attachment, no events on its tasks. Eight cards
   closed between 09:56 and 12:34 on a Monday are a board being tidied, and they would otherwise
-  read as that Monday's work.
+  read as that Monday's work. Two counters say the same in numbers, for the tidying that also
+  reassigned a card or left a comment on it: `tasks_touched_in_period`, how many of the story's
+  tasks moved inside the window, and `work_events_count`, the events that put something on the
+  card — a comment, an attachment, a description, a status move other than the closure — as
+  against the flag, the date, an assignee and a sprint, which are bookkeeping.
 - **A finish date is not an event.** A closure entered after the fact still counts — teams move
   cards to Done days later — but nothing in Taiga obliges anyone to fill `finish_date` in, so a
   card with **no** event in the window enters the answer only with
@@ -368,7 +392,10 @@ unnamed "something changed".
   answer, and most of that text is `false`, `null` and `[]`. `verbosity: "compact"` leaves out
   every empty value, the web URLs and `status_path` — `status_events` says the same — and drops
   the indentation. That cuts the answer to between a third and a half its size, depending on how
-  much comment text it carries, and loses nothing a report would have printed.
+  much comment text it carries, and loses nothing a report would have printed. The flags that
+  are read as answers stay even when the answer is no — `in_period`, `closed_in_period`,
+  `reopened_in_period`, `all_tasks_done` and the task counters — because with
+  `tasks_scope: "all"` a missing `in_period` is a poor way to say "this task did not move".
 
 ## Field support per item kind
 
@@ -396,7 +423,7 @@ Two Taiga rules the server enforces for you instead of letting the field be drop
 ## Development
 
 ```bash
-bun run test        # 142 tests against an in-memory Taiga (no network)
+bun run test        # 149 tests against an in-memory Taiga (no network)
 bun run typecheck
 bun run build
 ```
